@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Build artifacts (PyInstaller etc.)
+build/
+dist/
+NEW/build/
+NEW/dist/
+
+# Large binaries / downloaded tools (auto-fetched at runtime, not source)
+*.exe
+*.pt
+*.pth
+*.onnx

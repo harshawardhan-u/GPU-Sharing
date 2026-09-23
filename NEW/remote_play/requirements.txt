@@ -1,0 +1,6 @@
+ursina
+websockets
+pygame
+mss
+opencv-python
+numpy
