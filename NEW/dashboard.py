@@ -93,6 +93,115 @@ if __name__ == '__main__':
     ThreadingHTTPServer(('127.0.0.1', port), StreamingRequestHandler).serve_forever()
 """
 
+# --- LAN-ONLY VARIANT: same /execute engine, plus a /pair handshake so a
+# client can trade a 6-digit code for the api_key directly, no Firebase
+# involved. Binds 0.0.0.0 (not just localhost) so other LAN devices can
+# actually reach it. Kept as a separate constant so the Cloudflare/Firebase
+# path above is untouched. ---
+LAN_AGENT_SERVER_CODE = """
+import json, subprocess, os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+class StreamingRequestHandler(BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
+    def do_POST(self):
+        if self.path == '/pair':
+            content_length = int(self.headers.get('Content-Length', 0))
+            payload = json.loads(self.rfile.read(content_length))
+            code = payload.get("code", "")
+            client_name = payload.get("client_name", "Unknown")
+
+            if code != os.environ.get('LAN_CODE', ''):
+                body = json.dumps({"status": "rejected"}).encode('utf-8')
+                self.send_response(403)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            clients = {}
+            try:
+                if os.path.exists("allowed_clients.json"):
+                    with open("allowed_clients.json", "r") as f:
+                        clients = json.load(f)
+            except Exception:
+                clients = {}
+            clients[client_name] = "approved"
+            with open("allowed_clients.json", "w") as f:
+                json.dump(clients, f)
+
+            body = json.dumps({"status": "approved", "api_key": os.environ.get('GPU_API_KEY', '')}).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        auth_header = self.headers.get('Authorization')
+        if auth_header != f"Bearer {os.environ.get('GPU_API_KEY', '')}":
+            self.send_response(401); self.end_headers(); return
+
+        if self.path == '/execute':
+            content_length = int(self.headers.get('Content-Length', 0))
+            payload = json.loads(self.rfile.read(content_length))
+
+            client_name = payload.get("client_name", "Unknown")
+
+            is_approved = False
+            try:
+                if os.path.exists("allowed_clients.json"):
+                    with open("allowed_clients.json", "r") as f:
+                        clients = json.load(f)
+                        if clients.get(client_name) == "approved":
+                            is_approved = True
+            except Exception:
+                pass
+
+            if not is_approved:
+                self.send_response(403); self.end_headers(); return
+
+            target_file = payload.get("target_file", "script.py")
+            script_content = payload.get("script_content", "")
+
+            with open("temp_script.py", "w", encoding="utf-8") as f:
+                f.write(script_content)
+
+            subprocess.run(["docker", "exec", "gpu_share_node", "mkdir", "-p", "/app"], capture_output=True)
+            subprocess.run(["docker", "cp", "temp_script.py", f"gpu_share_node:/app/{target_file}"], capture_output=True)
+            if os.path.exists("temp_script.py"): os.remove("temp_script.py")
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Transfer-Encoding', 'chunked')
+            self.end_headers()
+
+            cmd = ["docker", "exec", "-w", "/app", "gpu_share_node", "python", "-u", target_file]
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+            while True:
+                chunk = process.stdout.read1(4096)
+                if not chunk:
+                    if process.poll() is not None: break
+                    continue
+                self.wfile.write(f"{len(chunk):X}\\r\\n".encode('utf-8'))
+                self.wfile.write(chunk)
+                self.wfile.write(b"\\r\\n")
+                self.wfile.flush()
+
+            process.wait()
+            self.wfile.write(b"0\\r\\n\\r\\n")
+            self.wfile.flush()
+        else:
+            self.send_response(404); self.end_headers()
+
+if __name__ == '__main__':
+    port = int(os.environ.get('AGENT_PORT', 9999))
+    ThreadingHTTPServer(('0.0.0.0', port), StreamingRequestHandler).serve_forever()
+"""
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
@@ -122,6 +231,11 @@ class ComputeNexusApp(ctk.CTk):
         self._demo_section_revealed = False
         self._demo_running = False
         self._last_render_path = None
+
+        self.is_lan_hosting = False
+        self.lan_announce_stop = None
+        self.lan_code = None
+        self.lan_port = None
 
         self.build_auth_screen()
 
@@ -153,6 +267,9 @@ class ComputeNexusApp(ctk.CTk):
 
         self.toggle_mode_btn = ctk.CTkButton(self.auth_frame, text="Don't have an account? Create One", fg_color="transparent", text_color="#1DB954", font=ctk.CTkFont(weight="bold"), command=self.switch_to_signup_mode)
         self.toggle_mode_btn.pack(pady=(20, 10))
+
+        self.lan_link_btn = ctk.CTkButton(self.auth_frame, text="⚡ Connect Locally (Same Wi-Fi, No Internet)", fg_color="transparent", text_color="#f39c12", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.show_lan_screen)
+        self.lan_link_btn.pack(pady=(0, 20))
 
         self.switch_to_login_mode()
 
@@ -445,20 +562,25 @@ class ComputeNexusApp(ctk.CTk):
         demo_label = ctk.CTkLabel(self.demo_section, text="Run a workload on the host's GPU", font=ctk.CTkFont(size=15, weight="bold"))
         demo_label.grid(row=0, column=0, columnspan=2, padx=15, pady=(15, 8), sticky="w")
 
+        self.preview_local_btn = ctk.CTkButton(self.demo_section, text="🐌 Step 1: Preview Locally (this laptop, no GPU sharing)", height=34,
+                                                 fg_color="#3a2a12", hover_color="#4a3618", text_color="#f0a030",
+                                                 command=self.run_local_preview)
+        self.preview_local_btn.grid(row=1, column=0, columnspan=2, padx=15, pady=(0, 8), sticky="ew")
+
         self.matmul_btn = ctk.CTkButton(self.demo_section, text="🎲 Matrix Multiply (5000x5000)", height=38, fg_color="#333333", hover_color="#444444",
                                          command=lambda: self.run_demo_script("train_model.py", "Matrix Multiply"))
-        self.matmul_btn.grid(row=1, column=0, padx=(15, 5), pady=5, sticky="ew")
+        self.matmul_btn.grid(row=2, column=0, padx=(15, 5), pady=5, sticky="ew")
 
-        self.raytrace_btn = ctk.CTkButton(self.demo_section, text="🎨 GPU Ray Tracer", height=38,
+        self.raytrace_btn = ctk.CTkButton(self.demo_section, text="🎨 Step 2: Run on Shared GPU (high quality)", height=38,
                                            command=lambda: self.run_demo_script("gpu_raytracer.py", "GPU Ray Tracer"))
-        self.raytrace_btn.grid(row=1, column=1, padx=(5, 15), pady=5, sticky="ew")
+        self.raytrace_btn.grid(row=2, column=1, padx=(5, 15), pady=5, sticky="ew")
 
         self.demo_output_box = ctk.CTkTextbox(self.demo_section, height=130, font=ctk.CTkFont(family="Courier", size=11))
-        self.demo_output_box.grid(row=2, column=0, columnspan=2, padx=15, pady=10, sticky="nsew")
+        self.demo_output_box.grid(row=3, column=0, columnspan=2, padx=15, pady=10, sticky="nsew")
         self.demo_output_box.configure(state="disabled")
 
         self.demo_image_label = ctk.CTkLabel(self.demo_section, text="", fg_color="#0d0d0d", corner_radius=8)
-        self.demo_image_label.grid(row=3, column=0, columnspan=2, padx=15, pady=(0, 5), sticky="nsew")
+        self.demo_image_label.grid(row=4, column=0, columnspan=2, padx=15, pady=(0, 5), sticky="nsew")
 
         self.open_render_btn = ctk.CTkButton(self.demo_section, text="📂 Open Full-Resolution Image", height=32, command=self.open_full_render)
 
@@ -944,6 +1066,7 @@ class ComputeNexusApp(ctk.CTk):
         self._demo_running = True
         self.matmul_btn.configure(state="disabled")
         self.raytrace_btn.configure(state="disabled")
+        self.preview_local_btn.configure(state="disabled")
         self.open_render_btn.grid_forget()
         self.demo_image_label.configure(image=None, text="")
 
@@ -1048,12 +1171,71 @@ class ComputeNexusApp(ctk.CTk):
         self._demo_image_ref = ctk_img  # keep a reference so Tk doesn't garbage-collect it
 
         if self._last_render_path:
-            self.open_render_btn.grid(row=4, column=0, columnspan=2, padx=15, pady=(0, 15), sticky="ew")
+            self.open_render_btn.grid(row=5, column=0, columnspan=2, padx=15, pady=(0, 15), sticky="ew")
 
     def _demo_finished(self):
         self._demo_running = False
         self.matmul_btn.configure(state="normal")
         self.raytrace_btn.configure(state="normal")
+        self.preview_local_btn.configure(state="normal")
+
+    def run_local_preview(self):
+        """Renders the same ray tracer script right here on this laptop, at
+        low quality, with no host/network involved at all -- this is the
+        'before' half of the low-quality-local vs high-quality-shared-GPU
+        comparison. Doesn't require being joined/approved to any room."""
+        if self._demo_running:
+            return
+
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+        else:
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(app_dir, "gpu_raytracer.py")
+        if not os.path.exists(script_path):
+            self.append_demo_output("❌ gpu_raytracer.py not found next to dashboard.py.\n")
+            return
+
+        self._demo_running = True
+        self.matmul_btn.configure(state="disabled")
+        self.raytrace_btn.configure(state="disabled")
+        self.preview_local_btn.configure(state="disabled")
+        self.open_render_btn.grid_forget()
+        self.demo_image_label.configure(image=None, text="")
+
+        self.demo_output_box.configure(state="normal")
+        self.demo_output_box.delete("1.0", "end")
+        self.demo_output_box.insert("end", "▶ Rendering locally on THIS laptop (low quality, no GPU sharing)...\n\n")
+        self.demo_output_box.configure(state="disabled")
+
+        threading.Thread(target=self._run_local_preview_worker, args=(script_path,), daemon=True).start()
+
+    def _run_local_preview_worker(self, script_path):
+        out_path = os.path.join(os.path.expanduser("~"), "_cn_local_preview.png")
+        try:
+            startupinfo = None
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+            proc = subprocess.Popen(
+                [sys.executable, script_path, "--quality", "low", "--out", out_path, "--no-send"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, startupinfo=startupinfo,
+            )
+            for line in proc.stdout:
+                self.after(0, self.append_demo_output, line if line.endswith("\n") else line + "\n")
+            proc.wait()
+
+            if proc.returncode == 0 and os.path.exists(out_path):
+                with open(out_path, "rb") as f:
+                    data = f.read()
+                self.after(0, self.show_demo_image, data, "local_preview.png")
+            else:
+                self.after(0, self.append_demo_output, "❌ Local render failed.\n")
+        except Exception as e:
+            self.after(0, self.append_demo_output, f"❌ Unexpected error: {e}\n")
+        finally:
+            self.after(0, self._demo_finished)
 
     def open_full_render(self):
         if self._last_render_path and os.path.exists(self._last_render_path):
@@ -1061,6 +1243,357 @@ class ComputeNexusApp(ctk.CTk):
                 os.startfile(self._last_render_path)
             except Exception:
                 pass
+
+    # =========================================================================
+    # CONNECT LOCALLY (LAN) -- an alternate path from the sign-in screen that
+    # skips Firebase/Cloudflare entirely: pair via a 6-digit code + LAN
+    # broadcast discovery instead. Reuses the same /execute engine and the
+    # same ~/.gpu_share_config.json the demo-runner panel already reads, so
+    # once paired, everything downstream (Join tab's demo buttons) works
+    # completely unchanged.
+    # =========================================================================
+    def get_lan_ip(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("192.168.255.255", 1))
+            return s.getsockname()[0]
+        except Exception:
+            return "127.0.0.1"
+        finally:
+            s.close()
+
+    def show_lan_screen(self):
+        self.auth_frame.pack_forget()
+        if not hasattr(self, 'lan_frame'):
+            self.build_lan_screen()
+        self.lan_frame.pack(expand=True, fill="both")
+
+    def back_to_signin_from_lan(self):
+        self.lan_frame.pack_forget()
+        self.auth_frame.pack(expand=True, fill="both")
+
+    def build_lan_screen(self):
+        self.lan_frame = ctk.CTkFrame(self, fg_color="#121212")
+
+        back_btn = ctk.CTkButton(self.lan_frame, text="← Back to Sign In", fg_color="transparent", text_color="gray50", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.back_to_signin_from_lan)
+        back_btn.pack(pady=(20, 0), anchor="w", padx=20)
+
+        logo = ctk.CTkLabel(self.lan_frame, text="CONNECT LOCALLY", font=ctk.CTkFont(size=30, weight="bold"), text_color="#1DB954")
+        logo.pack(pady=(10, 5))
+        sub = ctk.CTkLabel(self.lan_frame, text="Same Wi-Fi network, no internet or sign-in needed.", text_color="gray50", font=ctk.CTkFont(size=13))
+        sub.pack(pady=(0, 20))
+
+        tabs = ctk.CTkFrame(self.lan_frame, fg_color="transparent")
+        tabs.pack(pady=(0, 15))
+        self.lan_host_tab_btn = ctk.CTkButton(tabs, text="Host My GPU", width=180, command=self.show_lan_host_pane)
+        self.lan_host_tab_btn.grid(row=0, column=0, padx=5)
+        self.lan_join_tab_btn = ctk.CTkButton(tabs, text="Join a GPU", width=180, command=self.show_lan_join_pane, fg_color="transparent", border_width=2, text_color=("#121212", "#DCE4EE"))
+        self.lan_join_tab_btn.grid(row=0, column=1, padx=5)
+
+        self.lan_pane_container = ctk.CTkFrame(self.lan_frame, fg_color="transparent")
+        self.lan_pane_container.pack(expand=True, fill="both", padx=40)
+
+        # --- Host pane ---
+        self.lan_host_pane = ctk.CTkFrame(self.lan_pane_container, fg_color="transparent")
+
+        self.lan_name_entry_host = ctk.CTkEntry(self.lan_host_pane, width=300, height=40, placeholder_text="Display Name")
+        self.lan_name_entry_host.insert(0, socket.gethostname())
+        self.lan_name_entry_host.pack(pady=8)
+
+        self.lan_gpu_switch = ctk.CTkSwitch(self.lan_host_pane, text="Enable NVIDIA Core Acceleration", progress_color="#1DB954")
+        self.lan_gpu_switch.pack(pady=8)
+
+        self.lan_host_status = ctk.CTkLabel(self.lan_host_pane, text="", text_color="gray60", font=ctk.CTkFont(size=13))
+        self.lan_host_status.pack(pady=5)
+
+        self.lan_start_host_btn = ctk.CTkButton(self.lan_host_pane, text="⚡ Start Hosting (LAN)", height=45, width=300, command=self.start_lan_hosting)
+        self.lan_start_host_btn.pack(pady=8)
+
+        self.lan_host_info_label = ctk.CTkLabel(self.lan_host_pane, text="", font=ctk.CTkFont(size=15, weight="bold"), text_color="#1DB954", justify="center")
+        self.lan_code_label = ctk.CTkLabel(self.lan_host_pane, text="", font=ctk.CTkFont(size=34, weight="bold"), text_color="#1DB954")
+        self.lan_stop_host_btn = ctk.CTkButton(self.lan_host_pane, text="Stop Hosting", height=40, width=300, fg_color="#E22134", hover_color="#B01625", command=self.stop_lan_hosting)
+
+        # --- Join pane ---
+        self.lan_join_pane = ctk.CTkFrame(self.lan_pane_container, fg_color="transparent")
+
+        self.lan_name_entry_join = ctk.CTkEntry(self.lan_join_pane, width=300, height=40, placeholder_text="Display Name")
+        self.lan_name_entry_join.insert(0, socket.gethostname())
+        self.lan_name_entry_join.pack(pady=8)
+
+        self.lan_scan_btn = ctk.CTkButton(self.lan_join_pane, text="🔍 Scan for Nearby Hosts", height=38, width=300, command=self.scan_lan_hosts)
+        self.lan_scan_btn.pack(pady=8)
+
+        self.lan_scan_results = ctk.CTkFrame(self.lan_join_pane, fg_color="transparent", width=300)
+        self.lan_scan_results.pack(pady=2, fill="x")
+
+        self.lan_ip_entry = ctk.CTkEntry(self.lan_join_pane, width=300, height=40, placeholder_text="Host IP:Port (auto-filled, or type it)")
+        self.lan_ip_entry.pack(pady=8)
+
+        self.lan_code_entry = ctk.CTkEntry(self.lan_join_pane, width=300, height=40, placeholder_text="6-Digit Code from Host", font=ctk.CTkFont(size=16, weight="bold"), justify="center")
+        self.lan_code_entry.pack(pady=8)
+
+        self.lan_join_status = ctk.CTkLabel(self.lan_join_pane, text="", text_color="gray60", font=ctk.CTkFont(size=13))
+        self.lan_join_status.pack(pady=5)
+
+        self.lan_connect_btn = ctk.CTkButton(self.lan_join_pane, text="Connect", height=45, width=300, command=self.connect_lan_client)
+        self.lan_connect_btn.pack(pady=8)
+
+        self.show_lan_host_pane()
+
+    def show_lan_host_pane(self):
+        self.lan_join_pane.pack_forget()
+        self.lan_host_pane.pack(expand=True, fill="both")
+        self.lan_host_tab_btn.configure(fg_color=["#3b8ed0", "#1f538d"])
+        self.lan_join_tab_btn.configure(fg_color="transparent")
+
+    def show_lan_join_pane(self):
+        self.lan_host_pane.pack_forget()
+        self.lan_join_pane.pack(expand=True, fill="both")
+        self.lan_join_tab_btn.configure(fg_color=["#3b8ed0", "#1f538d"])
+        self.lan_host_tab_btn.configure(fg_color="transparent")
+
+    # --- LAN hosting (provider side) ---
+    def start_lan_hosting(self):
+        has_docker = shutil.which("docker") is not None
+        docker_not_running = False
+        if has_docker:
+            startupinfo = None
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            try:
+                res = subprocess.run(["docker", "info"], capture_output=True, startupinfo=startupinfo)
+                if res.returncode != 0:
+                    docker_not_running = True
+            except Exception:
+                docker_not_running = True
+
+        if not has_docker or docker_not_running:
+            self.show_dependency_error(not has_docker, docker_not_running)
+            return
+
+        self.lan_start_host_btn.configure(state="disabled")
+        self.lan_gpu_switch.configure(state="disabled")
+        self.lan_name_entry_host.configure(state="disabled")
+        self.lan_host_status.configure(text="Provisioning local container...", text_color="#f39c12")
+
+        self.is_lan_hosting = True
+        threading.Thread(target=self.boot_lan_node, daemon=True).start()
+
+    def boot_lan_node(self):
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+        use_gpu = self.lan_gpu_switch.get() == 1
+        subprocess.run(["docker", "rm", "-f", "gpu_share_node"], capture_output=True, startupinfo=startupinfo)
+
+        if use_gpu:
+            res = subprocess.run(["docker", "run", "-d", "--gpus", "all", "--name", "gpu_share_node", "pytorch/pytorch:latest", "tail", "-f", "/dev/null"], capture_output=True, text=True, startupinfo=startupinfo)
+        else:
+            res = subprocess.run(["docker", "run", "-d", "--name", "gpu_share_node", "python:3.10-slim", "tail", "-f", "/dev/null"], capture_output=True, text=True, startupinfo=startupinfo)
+
+        if res.returncode != 0:
+            self.after(0, lambda: self.lan_host_status.configure(text="❌ Docker provisioning failed.", text_color="#E22134"))
+            self.after(0, self.reset_lan_host_ui)
+            return
+
+        api_key = secrets.token_urlsafe(16)
+        lan_code = "".join(secrets.choice("0123456789") for _ in range(6))
+        with open("agent_server.py", "w") as f:
+            f.write(LAN_AGENT_SERVER_CODE)
+
+        dynamic_port = self.get_free_port()
+        env = os.environ.copy()
+        env["GPU_API_KEY"] = api_key
+        env["AGENT_PORT"] = str(dynamic_port)
+        env["LAN_CODE"] = lan_code
+
+        self.agent_proc = subprocess.Popen(["python", "agent_server.py"], env=env, startupinfo=startupinfo)
+
+        self.lan_code = lan_code
+        self.lan_port = dynamic_port
+        self.lan_announce_stop = threading.Event()
+        host_name = self.lan_name_entry_host.get().strip() or socket.gethostname()
+        threading.Thread(target=self.lan_announce_loop, args=(self.lan_announce_stop, host_name, dynamic_port), daemon=True).start()
+
+        self.after(0, self.show_lan_host_success, lan_code, dynamic_port)
+
+    def lan_announce_loop(self, stop_event, name, port):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        ip = self.get_lan_ip()
+        payload = json.dumps({"type": "COMPUTE_NEXUS_LAN_HOST", "name": name, "ip": ip, "port": port}).encode('utf-8')
+        try:
+            while not stop_event.is_set():
+                try:
+                    sock.sendto(payload, ('255.255.255.255', 47600))
+                except Exception:
+                    pass
+                stop_event.wait(1.0)
+        finally:
+            sock.close()
+
+    def show_lan_host_success(self, code, port):
+        ip = self.get_lan_ip()
+        self.lan_host_status.configure(text="🟢 LAN Hosting Active", text_color="#1DB954")
+        self.lan_start_host_btn.pack_forget()
+        self.lan_host_info_label.configure(text=f"Give this to the other laptop:\nIP: {ip}   Port: {port}")
+        self.lan_host_info_label.pack(pady=(10, 0))
+        self.lan_code_label.configure(text=code)
+        self.lan_code_label.pack(pady=5)
+        self.lan_stop_host_btn.pack(pady=10)
+
+    def stop_lan_hosting(self):
+        self.lan_host_status.configure(text="Stopping...", text_color="#f39c12")
+        self.update()
+
+        if self.lan_announce_stop:
+            self.lan_announce_stop.set()
+            self.lan_announce_stop = None
+
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+        if shutil.which("docker") is not None:
+            try:
+                subprocess.run(["docker", "rm", "-f", "gpu_share_node"], capture_output=True, startupinfo=startupinfo)
+            except Exception:
+                pass
+
+        if hasattr(self, 'agent_proc') and self.agent_proc:
+            try:
+                self.agent_proc.terminate()
+            except Exception:
+                pass
+            self.agent_proc = None
+
+        self.is_lan_hosting = False
+        self.reset_lan_host_ui()
+
+    def reset_lan_host_ui(self):
+        self.lan_host_info_label.pack_forget()
+        self.lan_code_label.pack_forget()
+        self.lan_stop_host_btn.pack_forget()
+        self.lan_start_host_btn.pack(pady=8)
+        self.lan_start_host_btn.configure(state="normal")
+        self.lan_gpu_switch.configure(state="normal")
+        self.lan_name_entry_host.configure(state="normal")
+        self.lan_host_status.configure(text="Ready to share resources.", text_color="gray60")
+
+    # --- LAN joining (client side) ---
+    def scan_lan_hosts(self):
+        self.lan_scan_btn.configure(state="disabled", text="Scanning...")
+        for w in self.lan_scan_results.winfo_children():
+            w.destroy()
+        threading.Thread(target=self._scan_lan_hosts_worker, daemon=True).start()
+
+    def _scan_lan_hosts_worker(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(0.5)
+        found = {}
+        try:
+            sock.bind(('', 47600))
+            deadline = time.time() + 2.5
+            while time.time() < deadline:
+                try:
+                    data, addr = sock.recvfrom(2048)
+                    info = json.loads(data.decode('utf-8'))
+                    if info.get('type') == 'COMPUTE_NEXUS_LAN_HOST':
+                        found[info.get('ip', addr[0])] = info
+                except socket.timeout:
+                    continue
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        finally:
+            sock.close()
+
+        self.after(0, self._populate_lan_scan_results, list(found.values()))
+
+    def _populate_lan_scan_results(self, hosts):
+        self.lan_scan_btn.configure(state="normal", text="🔍 Scan for Nearby Hosts")
+        for w in self.lan_scan_results.winfo_children():
+            w.destroy()
+
+        if not hosts:
+            lbl = ctk.CTkLabel(self.lan_scan_results, text="No hosts found. Enter IP manually below.", text_color="gray50", font=ctk.CTkFont(size=11, slant="italic"))
+            lbl.pack(pady=2)
+            return
+
+        for h in hosts:
+            btn = ctk.CTkButton(self.lan_scan_results, text=f"{h.get('name', '?')}  @  {h['ip']}", height=32, fg_color="#262626", hover_color="#333333",
+                                 command=lambda ip=h['ip'], port=h.get('port', 0): self.select_lan_host(ip, port))
+            btn.pack(pady=2, fill="x")
+
+    def select_lan_host(self, ip, port):
+        self.lan_ip_entry.delete(0, 'end')
+        self.lan_ip_entry.insert(0, f"{ip}:{port}")
+
+    def connect_lan_client(self):
+        target = self.lan_ip_entry.get().strip()
+        code = self.lan_code_entry.get().strip()
+        name = self.lan_name_entry_join.get().strip() or socket.gethostname()
+
+        if not target or ':' not in target:
+            self.lan_join_status.configure(text="❌ Enter a valid Host IP:Port (scan or type it).", text_color="#E22134")
+            return
+        if len(code) != 6 or not code.isdigit():
+            self.lan_join_status.configure(text="❌ Enter the 6-digit code from the host.", text_color="#E22134")
+            return
+
+        self.lan_connect_btn.configure(state="disabled")
+        self.lan_join_status.configure(text="🔍 Connecting...", text_color="#f39c12")
+
+        threading.Thread(target=self._connect_lan_client_worker, args=(target, code, name), daemon=True).start()
+
+    def _connect_lan_client_worker(self, target, code, name):
+        try:
+            ip, port = target.split(':', 1)
+            url = f"http://{ip}:{port}"
+            res = requests.post(f"{url}/pair", json={"code": code, "client_name": name}, timeout=5)
+            if res.status_code == 403:
+                self.after(0, lambda: self.lan_join_status.configure(text="❌ Incorrect code.", text_color="#E22134"))
+                self.after(0, lambda: self.lan_connect_btn.configure(state="normal"))
+                return
+            if res.status_code != 200:
+                self.after(0, lambda: self.lan_join_status.configure(text=f"❌ Host returned status {res.status_code}.", text_color="#E22134"))
+                self.after(0, lambda: self.lan_connect_btn.configure(state="normal"))
+                return
+
+            data = res.json()
+            api_key = data.get("api_key")
+            if not api_key:
+                self.after(0, lambda: self.lan_join_status.configure(text="❌ Invalid response from host.", text_color="#E22134"))
+                self.after(0, lambda: self.lan_connect_btn.configure(state="normal"))
+                return
+
+            config_path = os.path.expanduser("~/.gpu_share_config.json")
+            with open(config_path, "w") as f:
+                json.dump({"url": url, "api_key": api_key, "client_name": name}, f)
+
+            self.my_username = name
+            self.my_email = ""
+            self.after(0, self.enter_workspace_via_lan)
+        except requests.exceptions.RequestException as e:
+            self.after(0, lambda err=e: self.lan_join_status.configure(text=f"❌ Connection error: {err}", text_color="#E22134"))
+            self.after(0, lambda: self.lan_connect_btn.configure(state="normal"))
+        except Exception as e:
+            self.after(0, lambda err=e: self.lan_join_status.configure(text=f"❌ Unexpected error: {err}", text_color="#E22134"))
+            self.after(0, lambda: self.lan_connect_btn.configure(state="normal"))
+
+    def enter_workspace_via_lan(self):
+        self.lan_frame.pack_forget()
+        self.build_main_workspace()
+        self.show_join_frame()
+        self.join_status.configure(text="✅ Connected via LAN! GPU workload panel ready below.", text_color="#1DB954")
+        self._demo_section_revealed = True
+        self.reveal_demo_section()
 
     def on_closing(self):
         # Wrap everything in a try...finally block. 

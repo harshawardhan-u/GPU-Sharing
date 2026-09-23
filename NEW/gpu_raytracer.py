@@ -224,28 +224,47 @@ def send_file_over_stdout(path):
     print("##CLOUDRUN_FILE_END##", flush=True)
 
 
+# Quality presets. 'low' is meant to run live on a non-GPU laptop's CPU in
+# about a second (small + grainy); 'high' is what gets sent to a real GPU
+# (large + smooth). Same scene, same code -- only the workload size differs,
+# which is exactly what makes the side-by-side comparison honest.
+QUALITY_PRESETS = {
+    'low':    dict(width=400,  height=225, samples=3,  bounces=2),
+    'medium': dict(width=960,  height=540, samples=16, bounces=4),
+    'high':   dict(width=1280, height=720, samples=32, bounces=4),
+}
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--device', default=None, choices=['cuda', 'cpu'])
-    p.add_argument('--width', type=int, default=960)
-    p.add_argument('--height', type=int, default=540)
-    p.add_argument('--samples', type=int, default=24)
-    p.add_argument('--bounces', type=int, default=4)
+    p.add_argument('--quality', choices=list(QUALITY_PRESETS), default='high',
+                    help='Quality preset; individual --width/--height/--samples/--bounces override it')
+    p.add_argument('--width', type=int, default=None)
+    p.add_argument('--height', type=int, default=None)
+    p.add_argument('--samples', type=int, default=None)
+    p.add_argument('--bounces', type=int, default=None)
     p.add_argument('--out', default='render.png')
     p.add_argument('--no-send', action='store_true', help='skip the base64 file transfer (for local testing)')
     args = p.parse_args()
+
+    preset = QUALITY_PRESETS[args.quality]
+    width = args.width if args.width is not None else preset['width']
+    height = args.height if args.height is not None else preset['height']
+    samples = args.samples if args.samples is not None else preset['samples']
+    bounces = args.bounces if args.bounces is not None else preset['bounces']
 
     device = args.device or ('cuda' if torch.cuda.is_available() else 'cpu')
     if device == 'cuda' and not torch.cuda.is_available():
         print("⚠ CUDA requested but not available, falling back to CPU.")
         device = 'cpu'
 
-    print(f"Rendering {args.width}x{args.height}, {args.samples} samples, {args.bounces} bounces")
+    print(f"Quality: {args.quality}  |  Rendering {width}x{height}, {samples} samples, {bounces} bounces")
     print(f"Device: {device}" + (f" ({torch.cuda.get_device_name(0)})" if device == 'cuda' else " (no GPU)"))
     sys.stdout.flush()
 
     t0 = time.time()
-    img = render(device, args.width, args.height, args.samples, args.bounces)
+    img = render(device, width, height, samples, bounces)
     if device == 'cuda':
         torch.cuda.synchronize()
     elapsed = time.time() - t0
