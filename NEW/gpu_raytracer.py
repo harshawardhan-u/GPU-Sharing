@@ -2,10 +2,20 @@
 GPU ray tracer -- the 'impossible on this laptop' demo.
 
 Renders a classic reflective-spheres-on-a-checkered-floor scene by casting
-rays and bouncing them off mirrors, computing everything as PyTorch tensor
+rays and bouncing them off mirrors, computing everything as vectorized array
 ops across every pixel at once. This is deliberately from-scratch (no
 pretrained model, no downloaded weights, no external API) so it's
 unambiguously "this GPU did real work", not "we called a library".
+
+Two backends, picked automatically:
+  - CUDA available (PyTorch installed, real GPU present): uses PyTorch
+    tensors on the GPU. This is the path used inside the Docker container
+    on the GPU laptop.
+  - Otherwise: uses NumPy on the CPU. NumPy is a ~30MB dependency (vs.
+    PyTorch's several-hundred-MB+), so the "run it locally, no sharing"
+    side of the demo doesn't need PyTorch installed at all -- useful on a
+    laptop with little disk space, and NumPy is the right tool for
+    CPU-only math anyway (PyTorch's whole value here is CUDA).
 
 Run directly to test:
     python gpu_raytracer.py --device cuda --width 1280 --height 720
@@ -24,17 +34,191 @@ import sys
 import time
 import zlib
 
-import torch
+
+def has_cuda():
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
 
 
-def normalize(v, dim=-1, eps=1e-8):
+# ===========================================================================
+# NumPy (CPU) backend
+# ===========================================================================
+def normalize_np(v, axis=-1, eps=1e-8):
+    import numpy as np
+    return v / (np.linalg.norm(v, axis=axis, keepdims=True) + eps)
+
+
+def intersect_scene_numpy(ray_orig, ray_dir, centers, radii):
+    import numpy as np
+    N = centers.shape[0]
+    oc = ray_orig[:, :, None, :] - centers.reshape(1, 1, N, 3)   # (H, W, N, 3)
+    d = ray_dir[:, :, None, :]                                    # (H, W, 1, 3), broadcasts
+    a = (d * d).sum(-1)
+    b = (oc * d).sum(-1)
+    c = (oc * oc).sum(-1) - (radii.reshape(1, 1, N) ** 2)
+    disc = b * b - a * c
+    sqrt_disc = np.sqrt(np.clip(disc, 0, None))
+    t0 = (-b - sqrt_disc) / a
+    valid = (disc > 0) & (t0 > 1e-3)
+    t0 = np.where(valid, t0, np.full_like(t0, np.inf))
+    hit_t = np.min(t0, axis=-1)
+    hit_idx = np.argmin(t0, axis=-1)
+    hit_idx = np.where(np.isfinite(hit_t), hit_idx, -1)
+    return hit_t, hit_idx
+
+
+def build_scene_numpy():
+    import numpy as np
+    centers = np.array([
+        [0.0, -1000.0, 0.0],   # giant sphere standing in for the ground
+        [0.0, 1.0, 0.0],
+        [-2.6, 1.0, 0.8],
+        [2.6, 1.0, -0.4],
+        [-1.0, 0.6, 2.4],
+    ], dtype=np.float32)
+    radii = np.array([1000.0, 1.0, 1.0, 1.0, 0.6], dtype=np.float32)
+    albedos = np.array([
+        [0.5, 0.5, 0.5],
+        [0.9, 0.9, 0.95],
+        [0.8, 0.15, 0.15],
+        [0.9, 0.7, 0.2],
+        [0.2, 0.4, 0.9],
+    ], dtype=np.float32)
+    is_mirror = np.array([False, True, False, True, False])
+    is_ground = np.array([True, False, False, False, False])
+    return centers, radii, albedos, is_mirror, is_ground
+
+
+def render_numpy(width, height, samples, max_bounces, progress=True):
+    import numpy as np
+    # Rays that already terminated (escaped to sky, or hit nothing) still get
+    # carried through the vectorized math below rather than branching them
+    # out -- their intermediate values can be inf/nan, but they're masked
+    # out via np.where before ever reaching `color`. Harmless, so silence
+    # NumPy's (correct, but noisy for this pattern) warnings about it.
+    np.seterr(invalid='ignore', divide='ignore')
+
+    centers, radii, albedos, is_mirror, is_ground = build_scene_numpy()
+
+    aspect = width / height
+    cam_origin = np.array([0.0, 2.2, 7.0], dtype=np.float32)
+    look_at = np.array([0.0, 0.7, 0.0], dtype=np.float32)
+    vup = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    vfov = 35.0
+    half_h = math.tan(math.radians(vfov) / 2)
+    half_w = aspect * half_h
+
+    w_axis = normalize_np(cam_origin - look_at)
+    u_axis = normalize_np(np.cross(vup, w_axis))
+    v_axis = np.cross(w_axis, u_axis)
+
+    lower_left = cam_origin - half_w * u_axis - half_h * v_axis - w_axis
+    horizontal = 2 * half_w * u_axis
+    vertical = 2 * half_h * v_axis
+
+    ys, xs = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
+    xs = xs.astype(np.float32)
+    ys = (height - 1 - ys).astype(np.float32)
+
+    light_dirs = normalize_np(np.array([
+        [-1.0, 1.2, 0.6],
+        [-0.85, 1.3, 0.75],
+        [-1.15, 1.15, 0.5],
+        [-1.0, 1.25, 0.4],
+    ], dtype=np.float32))
+
+    accum = np.zeros((height, width, 3), dtype=np.float32)
+
+    for s in range(samples):
+        u = (xs + np.random.rand(height, width).astype(np.float32)) / (width - 1)
+        v = (ys + np.random.rand(height, width).astype(np.float32)) / (height - 1)
+        ray_dir = normalize_np(
+            lower_left.reshape(1, 1, 3)
+            + u[..., None] * horizontal.reshape(1, 1, 3)
+            + v[..., None] * vertical.reshape(1, 1, 3)
+            - cam_origin.reshape(1, 1, 3)
+        )
+        ray_orig = np.broadcast_to(cam_origin.reshape(1, 1, 3), (height, width, 3)).copy()
+
+        throughput = np.ones((height, width, 3), dtype=np.float32)
+        color = np.zeros((height, width, 3), dtype=np.float32)
+        active = np.ones((height, width), dtype=bool)
+
+        for bounce in range(max_bounces):
+            hit_t, hit_idx = intersect_scene_numpy(ray_orig, ray_dir, centers, radii)
+            hit_mask = hit_idx >= 0
+
+            t_sky = 0.5 * (ray_dir[..., 1] + 1.0)
+            sky = (1 - t_sky)[..., None] * np.array([1.0, 1.0, 1.0], dtype=np.float32) + \
+                t_sky[..., None] * np.array([0.5, 0.7, 1.0], dtype=np.float32)
+            escaped = active & (~hit_mask)
+            color = color + np.where(escaped[..., None], throughput * sky, np.zeros_like(color))
+            active = active & hit_mask
+            if not active.any():
+                break
+
+            safe_idx = np.clip(hit_idx, 0, None)
+            hit_point = ray_orig + hit_t[..., None] * ray_dir
+            normal = normalize_np(hit_point - centers[safe_idx])
+
+            albedo = albedos[safe_idx].copy()
+            ground_mask = is_ground[safe_idx] & active
+            checker = (np.floor(hit_point[..., 0] * 0.7) + np.floor(hit_point[..., 2] * 0.7)) % 2
+            dark = checker < 1
+            light_floor = np.array([0.85, 0.85, 0.82], dtype=np.float32)
+            dark_floor = np.array([0.1, 0.12, 0.15], dtype=np.float32)
+            floor_color = np.where(dark[..., None], dark_floor, light_floor)
+            albedo = np.where(ground_mask[..., None], floor_color, albedo)
+
+            direct = np.zeros((height, width, 3), dtype=np.float32)
+            shadow_orig = hit_point + normal * 1e-3
+            for ld in light_dirs:
+                ndotl = np.clip((normal * ld.reshape(1, 1, 3)).sum(-1), 0, None)
+                ld_expand = np.broadcast_to(ld.reshape(1, 1, 3), (height, width, 3))
+                _, shadow_idx = intersect_scene_numpy(shadow_orig, ld_expand, centers, radii)
+                lit = (shadow_idx < 0).astype(np.float32)
+                direct = direct + (ndotl * lit)[..., None] * albedo
+            direct = direct / len(light_dirs)
+
+            ambient = 0.08 * albedo
+            mirror_mask = is_mirror[safe_idx]
+            surface_color = np.where(
+                mirror_mask[..., None], np.zeros_like(albedo), direct + ambient,
+            )
+            color = color + np.where(active[..., None], throughput * surface_color, np.zeros_like(color))
+
+            reflect_dir = ray_dir - 2 * (ray_dir * normal).sum(-1, keepdims=True) * normal
+            ray_dir = np.where(mirror_mask[..., None], reflect_dir, ray_dir)
+            ray_orig = hit_point + normal * 1e-3
+            throughput = np.where(
+                mirror_mask[..., None], throughput * np.clip(albedo, 0.05, None), throughput,
+            )
+            active = active & mirror_mask
+
+        accum = accum + color
+
+        if progress and (s + 1) % max(1, samples // 10) == 0:
+            pct = 100 * (s + 1) / samples
+            print(f"  rendering... {pct:5.1f}%  (sample {s + 1}/{samples})", flush=True)
+
+    img = np.clip(accum / samples, 0, 1)
+    img = np.power(img, 1 / 2.2)  # gamma correction
+    img = np.round(img * 255).astype(np.uint8)
+    return img
+
+
+# ===========================================================================
+# PyTorch (CUDA) backend
+# ===========================================================================
+def normalize_torch(v, dim=-1, eps=1e-8):
     return v / (v.norm(dim=dim, keepdim=True) + eps)
 
 
-def intersect_scene(ray_orig, ray_dir, centers, radii):
-    """Ray-sphere intersection for every pixel against every object at once.
-    ray_orig/ray_dir: (H, W, 3). centers: (N, 3). radii: (N,).
-    Returns hit_t (H, W) and hit_idx (H, W), hit_idx=-1 for misses."""
+def intersect_scene_torch(ray_orig, ray_dir, centers, radii):
+    import torch
     H, W, _ = ray_orig.shape
     N = centers.shape[0]
     oc = ray_orig.unsqueeze(2) - centers.view(1, 1, N, 3)          # (H, W, N, 3)
@@ -52,7 +236,8 @@ def intersect_scene(ray_orig, ray_dir, centers, radii):
     return hit_t, hit_idx
 
 
-def build_scene(device):
+def build_scene_torch(device):
+    import torch
     centers = torch.tensor([
         [0.0, -1000.0, 0.0],   # giant sphere standing in for the ground
         [0.0, 1.0, 0.0],
@@ -73,8 +258,9 @@ def build_scene(device):
     return centers, radii, albedos, is_mirror, is_ground
 
 
-def render(device, width, height, samples, max_bounces, progress=True):
-    centers, radii, albedos, is_mirror, is_ground = build_scene(device)
+def render_torch(device, width, height, samples, max_bounces, progress=True):
+    import torch
+    centers, radii, albedos, is_mirror, is_ground = build_scene_torch(device)
 
     aspect = width / height
     cam_origin = torch.tensor([0.0, 2.2, 7.0], device=device)
@@ -84,8 +270,8 @@ def render(device, width, height, samples, max_bounces, progress=True):
     half_h = math.tan(math.radians(vfov) / 2)
     half_w = aspect * half_h
 
-    w_axis = normalize(cam_origin - look_at)
-    u_axis = normalize(torch.linalg.cross(vup, w_axis))
+    w_axis = normalize_torch(cam_origin - look_at)
+    u_axis = normalize_torch(torch.linalg.cross(vup, w_axis))
     v_axis = torch.linalg.cross(w_axis, u_axis)
 
     lower_left = cam_origin - half_w * u_axis - half_h * v_axis - w_axis
@@ -100,7 +286,7 @@ def render(device, width, height, samples, max_bounces, progress=True):
     xs = xs.float()
     ys = (height - 1 - ys).float()
 
-    light_dirs = normalize(torch.tensor([
+    light_dirs = normalize_torch(torch.tensor([
         [-1.0, 1.2, 0.6],
         [-0.85, 1.3, 0.75],
         [-1.15, 1.15, 0.5],
@@ -112,7 +298,7 @@ def render(device, width, height, samples, max_bounces, progress=True):
     for s in range(samples):
         u = (xs + torch.rand_like(xs)) / (width - 1)
         v = (ys + torch.rand_like(ys)) / (height - 1)
-        ray_dir = normalize(
+        ray_dir = normalize_torch(
             lower_left.view(1, 1, 3)
             + u.unsqueeze(-1) * horizontal.view(1, 1, 3)
             + v.unsqueeze(-1) * vertical.view(1, 1, 3)
@@ -125,7 +311,7 @@ def render(device, width, height, samples, max_bounces, progress=True):
         active = torch.ones(height, width, dtype=torch.bool, device=device)
 
         for bounce in range(max_bounces):
-            hit_t, hit_idx = intersect_scene(ray_orig, ray_dir, centers, radii)
+            hit_t, hit_idx = intersect_scene_torch(ray_orig, ray_dir, centers, radii)
             hit_mask = hit_idx >= 0
 
             t_sky = 0.5 * (ray_dir[..., 1] + 1.0)
@@ -139,7 +325,7 @@ def render(device, width, height, samples, max_bounces, progress=True):
 
             safe_idx = hit_idx.clamp(min=0)
             hit_point = ray_orig + hit_t.unsqueeze(-1) * ray_dir
-            normal = normalize(hit_point - centers[safe_idx])
+            normal = normalize_torch(hit_point - centers[safe_idx])
 
             albedo = albedos[safe_idx].clone()
             ground_mask = is_ground[safe_idx] & active
@@ -155,7 +341,7 @@ def render(device, width, height, samples, max_bounces, progress=True):
             for ld in light_dirs:
                 ndotl = (normal * ld.view(1, 1, 3)).sum(-1).clamp(min=0)
                 ld_expand = ld.view(1, 1, 3).expand(height, width, 3)
-                _, shadow_idx = intersect_scene(shadow_orig, ld_expand, centers, radii)
+                _, shadow_idx = intersect_scene_torch(shadow_orig, ld_expand, centers, radii)
                 lit = (shadow_idx < 0).float()
                 direct = direct + (ndotl * lit).unsqueeze(-1) * albedo
             direct = direct / len(light_dirs)
@@ -254,19 +440,27 @@ def main():
     samples = args.samples if args.samples is not None else preset['samples']
     bounces = args.bounces if args.bounces is not None else preset['bounces']
 
-    device = args.device or ('cuda' if torch.cuda.is_available() else 'cpu')
-    if device == 'cuda' and not torch.cuda.is_available():
-        print("⚠ CUDA requested but not available, falling back to CPU.")
-        device = 'cpu'
+    want_cuda = args.device == 'cuda' or (args.device is None and has_cuda())
+    if args.device == 'cuda' and not has_cuda():
+        print("⚠ CUDA requested but not available (or PyTorch isn't installed) -- falling back to CPU/NumPy.")
+        want_cuda = False
 
     print(f"Quality: {args.quality}  |  Rendering {width}x{height}, {samples} samples, {bounces} bounces")
-    print(f"Device: {device}" + (f" ({torch.cuda.get_device_name(0)})" if device == 'cuda' else " (no GPU)"))
     sys.stdout.flush()
 
     t0 = time.time()
-    img = render(device, width, height, samples, bounces)
-    if device == 'cuda':
+    if want_cuda:
+        import torch
+        print(f"Device: cuda ({torch.cuda.get_device_name(0)})")
+        sys.stdout.flush()
+        img = render_torch('cuda', width, height, samples, bounces)
         torch.cuda.synchronize()
+        device = 'cuda'
+    else:
+        print("Device: cpu (NumPy, no GPU)")
+        sys.stdout.flush()
+        img = render_numpy(width, height, samples, bounces)
+        device = 'cpu'
     elapsed = time.time() - t0
 
     save_png(args.out, img)
