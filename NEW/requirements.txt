@@ -1,3 +1,10 @@
 customtkinter
 requests
 Pillow
+
+# For game.py / real_time_compute.py (both laptops):
+numpy
+pygame
+websockets
+# On the GPU laptop only, for real_time_compute.py --serve:
+#   torch  (with a +cuXXX build, e.g. pip install torch --index-url https://download.pytorch.org/whl/cu121)
