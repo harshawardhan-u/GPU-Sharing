@@ -1,7 +1,28 @@
 import sys
 import os
 import json
+import subprocess
 import requests
+
+def run_play_demo():
+    """
+    'cloud-run game.py' is a different kind of job than the text-streaming
+    path below: the live GPU-rendered scene needs real-time video + input,
+    not stdout. This launches remote_play/client.py, which auto-discovers
+    the GPU host on the LAN and prompts for its pairing code.
+    """
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    client_script = os.path.join(base_dir, "remote_play", "client.py")
+    if not os.path.exists(client_script):
+        print("❌ Error: remote_play/client.py not found next to cloud_run.py.")
+        sys.exit(1)
+
+    result = subprocess.run([sys.executable, client_script], cwd=os.path.dirname(client_script))
+    sys.exit(result.returncode)
 
 def main():
     if len(sys.argv) < 2:
@@ -9,10 +30,14 @@ def main():
         sys.exit(1)
 
     target_file = sys.argv[1]
-    
+
     if not os.path.exists(target_file):
         print(f"❌ Error: File '{target_file}' not found.")
         sys.exit(1)
+
+    if os.path.basename(target_file).lower() == "game.py":
+        run_play_demo()
+        return
 
     # Load connection credentials
     config_path = os.path.expanduser("~/.gpu_share_config.json")
@@ -29,11 +54,6 @@ def main():
 
     url = config.get("url")
     api_key = config.get("api_key")
-    
-    # ---------------------------------------------------------
-    # NEW: Extract the client name from the config file
-    # ---------------------------------------------------------
-    client_name = config.get("client_name", "Unknown")
 
     if not url or not api_key:
         print("❌ Error: Invalid configuration file. Join the room again.")
@@ -43,11 +63,7 @@ def main():
     with open(target_file, "r", encoding="utf-8") as f:
         script_content = f.read()
 
-    # ---------------------------------------------------------
-    # NEW: Inject client_name into the JSON payload
-    # ---------------------------------------------------------
     payload = {
-        "client_name": client_name,
         "target_file": target_file,
         "script_content": script_content
     }
@@ -68,12 +84,6 @@ def main():
         with requests.post(f"{url}/execute", json=payload, headers=headers, stream=True) as response:
             if response.status_code == 401:
                 print("❌ Error: Unauthorized. Your token might have expired.")
-                sys.exit(1)
-            # ---------------------------------------------------------
-            # NEW: Handle the 403 Forbidden status specifically
-            # ---------------------------------------------------------
-            elif response.status_code == 403:
-                print("❌ Error: Execution denied. You are not approved in the host's lobby.")
                 sys.exit(1)
             elif response.status_code != 200:
                 print(f"❌ Error: Server returned status {response.status_code}.")

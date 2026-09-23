@@ -7,7 +7,9 @@ your keypresses back to the host so you're actually controlling the scene
 that's rendering on someone else's GPU.
 
 Usage:
-    python client.py <host_ip> [--port 8765]
+    python client.py                        # auto-discovers a host on the LAN
+    python client.py 192.168.1.23            # connect to a known IP
+    python client.py 192.168.1.23 --code 1234  # skip the code prompt too
 
 Controls: W A S D to move, Space to float up, E to spawn more objects
 (more GPU load on the host), Esc or close the window to quit.
@@ -23,14 +25,43 @@ import numpy as np
 import pygame
 from websockets.sync.client import connect
 
-from shared import FRAME_W, FRAME_H
+from shared import FRAME_W, FRAME_H, discover_hosts
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('host', help='LAN IP address of the GPU laptop running app.py --serve')
+    p.add_argument('host', nargs='?', default=None, help='LAN IP of the GPU laptop. Omit to auto-discover.')
     p.add_argument('--port', type=int, default=8765)
+    p.add_argument('--code', default=None, help='6-digit code shown on the host. Omit to be prompted.')
     return p.parse_args()
+
+
+def resolve_host(args):
+    if args.host:
+        return args.host, args.port
+
+    print('Searching for GPU hosts on the LAN (3s)...')
+    hosts = discover_hosts(timeout=3.0)
+    if not hosts:
+        print('No hosts found automatically.')
+        ip = input('Enter the host IP manually: ').strip()
+        return ip, args.port
+
+    if len(hosts) == 1:
+        h = hosts[0]
+        print(f"Found host: {h.get('name', '?')} @ {h['ip']}")
+        return h['ip'], h.get('ws_port', args.port)
+
+    print('Multiple hosts found:')
+    for i, h in enumerate(hosts):
+        print(f"  [{i}] {h.get('name', '?')} @ {h['ip']}")
+    choice = input('Pick a number: ').strip()
+    try:
+        h = hosts[int(choice)]
+        return h['ip'], h.get('ws_port', args.port)
+    except (ValueError, IndexError):
+        print('Invalid choice.')
+        sys.exit(1)
 
 
 def receiver_loop(ws, state, state_lock):
@@ -51,7 +82,10 @@ def receiver_loop(ws, state, state_lock):
 
 def main():
     args = parse_args()
-    url = f'ws://{args.host}:{args.port}'
+    host_ip, port = resolve_host(args)
+    code = args.code or input('Enter the 6-digit code shown on the host: ').strip()
+
+    url = f'ws://{host_ip}:{port}'
     print(f'Connecting to {url} ...')
     try:
         ws_ctx = connect(url, max_size=None)
@@ -61,7 +95,16 @@ def main():
         sys.exit(1)
 
     with ws_ctx as ws:
-        print('Connected. Streaming should appear in a new window.')
+        ws.send(json.dumps({'code': code}))
+        try:
+            ack = json.loads(ws.recv(timeout=5))
+        except Exception:
+            print('No response from host during handshake.')
+            sys.exit(1)
+        if ack.get('status') != 'approved':
+            print('Rejected by host - the code was wrong.')
+            sys.exit(1)
+        print('Code accepted. Streaming should appear in a new window.')
 
         pygame.init()
         screen = pygame.display.set_mode((FRAME_W, FRAME_H))
