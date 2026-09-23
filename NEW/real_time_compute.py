@@ -43,6 +43,15 @@ DEFAULT_PORT = 47612
 FRAME_IN_FMT = '<ffBfI'         # mouse_x, mouse_y, mouse_active, dt, particle_count
 FRAME_IN_SIZE = struct.calcsize(FRAME_IN_FMT)
 
+# 'defender' mode (Star Defender / star_defender.py) has richer input (fire +
+# aim direction) and returns TWO variable-length arrays (enemies, bullets)
+# plus event counters (kills, was-player-hit) each frame, so it uses its own
+# formats instead of the simple fixed-array ones above.
+FRAME_IN_FMT_DEFENDER = '<ffBfffI'    # player_x, player_y, fire, aim_dx, aim_dy, dt, want_n
+FRAME_IN_SIZE_DEFENDER = struct.calcsize(FRAME_IN_FMT_DEFENDER)
+FRAME_OUT_HEADER_FMT_DEFENDER = '<IIiB'  # enemy_count, bullet_count, kills_this_frame, player_hit
+FRAME_OUT_HEADER_SIZE_DEFENDER = struct.calcsize(FRAME_OUT_HEADER_FMT_DEFENDER)
+
 
 def get_lan_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -195,6 +204,87 @@ def make_ws_handler(session_code):
         'dodge': (dodge_physics_step, spawn_dodge),
     }
 
+    # --- mode: 'defender' (Star Defender / star_defender.py) -- new ---
+    # Reuses dodge's swarm physics/spawner for the enemies, adds bullets
+    # (simple constant-velocity projectiles) and bullet<->enemy /
+    # enemy<->player collision, which is why it needs its own richer wire
+    # format (see FRAME_IN_FMT_DEFENDER / FRAME_OUT_HEADER_FMT_DEFENDER)
+    # and its own session loop instead of fitting the MODES table above.
+    def spawn_bullet(player_x, player_y, aim_dx, aim_dy, device, bullet_speed=600.0):
+        norm = (aim_dx ** 2 + aim_dy ** 2) ** 0.5
+        if norm < 1e-3:
+            aim_dx, aim_dy, norm = 0.0, -1.0, 1.0
+        pos = torch.tensor([[player_x, player_y]], device=device)
+        vel = torch.tensor([[aim_dx / norm * bullet_speed, aim_dy / norm * bullet_speed]], device=device)
+        return pos, vel
+
+    def step_bullets(bpos, bvel, dt, width=900.0, height=900.0, margin=50.0):
+        bpos = bpos + bvel * dt
+        keep = (bpos[:, 0] > -margin) & (bpos[:, 0] < width + margin) & \
+               (bpos[:, 1] > -margin) & (bpos[:, 1] < height + margin)
+        return bpos[keep], bvel[keep]
+
+    def resolve_bullet_hits(epos, evel, bpos, bvel, hit_radius=16.0):
+        if epos.shape[0] == 0 or bpos.shape[0] == 0:
+            return epos, evel, bpos, bvel, 0
+        diff = bpos.unsqueeze(1) - epos.unsqueeze(0)          # (M, N, 2)
+        dist_sq = (diff * diff).sum(-1)
+        hit_matrix = dist_sq < (hit_radius ** 2)              # (M, N)
+        bullet_hit = hit_matrix.any(dim=1)
+        enemy_hit = hit_matrix.any(dim=0)
+        kills = int(enemy_hit.sum().item())
+        return epos[~enemy_hit], evel[~enemy_hit], bpos[~bullet_hit], bvel[~bullet_hit], kills
+
+    def check_player_hit(epos, player_x, player_y, hit_radius=14.0):
+        if epos.shape[0] == 0:
+            return False
+        d2 = (epos[:, 0] - player_x) ** 2 + (epos[:, 1] - player_y) ** 2
+        return bool((d2 < hit_radius ** 2).any().item())
+
+    def run_defender_session(websocket, device):
+        remote_addr = websocket.remote_address
+        epos, evel = spawn_dodge(0, device)
+        bpos = torch.zeros(0, 2, device=device)
+        bvel = torch.zeros(0, 2, device=device)
+        n_frames = 0
+        t_start = time.time()
+        try:
+            for message in websocket:
+                if not isinstance(message, (bytes, bytearray)) or len(message) != FRAME_IN_SIZE_DEFENDER:
+                    continue
+                player_x, player_y, fire, aim_dx, aim_dy, dt, want_n = struct.unpack(FRAME_IN_FMT_DEFENDER, message)
+                dt = min(dt, 1 / 15)
+
+                if want_n > epos.shape[0]:
+                    extra_pos, extra_vel = spawn_dodge(want_n - epos.shape[0], device)
+                    epos = torch.cat([epos, extra_pos], dim=0)
+                    evel = torch.cat([evel, extra_vel], dim=0)
+
+                if fire:
+                    new_bpos, new_bvel = spawn_bullet(player_x, player_y, aim_dx, aim_dy, device)
+                    bpos = torch.cat([bpos, new_bpos], dim=0)
+                    bvel = torch.cat([bvel, new_bvel], dim=0)
+
+                if epos.shape[0] > 0:
+                    epos, evel = dodge_physics_step(epos, evel, player_x, player_y, dt)
+                if bpos.shape[0] > 0:
+                    bpos, bvel = step_bullets(bpos, bvel, dt)
+
+                epos, evel, bpos, bvel, kills = resolve_bullet_hits(epos, evel, bpos, bvel)
+                player_hit = check_player_hit(epos, player_x, player_y)
+
+                header = struct.pack(FRAME_OUT_HEADER_FMT_DEFENDER, epos.shape[0], bpos.shape[0], kills, 1 if player_hit else 0)
+                body = epos.to(torch.float32).cpu().numpy().tobytes() + bpos.to(torch.float32).cpu().numpy().tobytes()
+                websocket.send(header + body)
+                n_frames += 1
+        except Exception:
+            pass
+        finally:
+            elapsed = time.time() - t_start
+            avg_fps = n_frames / elapsed if elapsed > 0 else 0
+            print(f"[serve] client disconnected: {remote_addr} "
+                  f"({n_frames} frames, avg {avg_fps:.1f} fps served, mode=defender)")
+
     def handler(websocket):
         try:
             first = json.loads(websocket.recv(timeout=5))
@@ -209,6 +299,16 @@ def make_ws_handler(session_code):
             return
 
         game_mode = first.get('game', 'gravity')
+
+        if game_mode == 'defender':
+            try:
+                websocket.send(json.dumps({'status': 'approved'}))
+            except Exception:
+                return
+            print(f"[serve] client connected: {websocket.remote_address} (mode=defender)")
+            run_defender_session(websocket, 'cuda')
+            return
+
         if game_mode not in MODES:
             game_mode = 'gravity'
         physics_fn, spawn_fn = MODES[game_mode]
