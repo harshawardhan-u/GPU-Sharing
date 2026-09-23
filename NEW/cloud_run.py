@@ -126,6 +126,7 @@ def main():
 
     url = config.get("url")
     api_key = config.get("api_key")
+    client_name = config.get("client_name", "Unknown")
 
     if not url or not api_key:
         print("❌ Error: Invalid configuration file. Join the room again.")
@@ -136,6 +137,7 @@ def main():
         script_content = f.read()
 
     payload = {
+        "client_name": client_name,
         "target_file": target_file,
         "script_content": script_content
     }
@@ -156,6 +158,9 @@ def main():
         with requests.post(f"{url}/execute", json=payload, headers=headers, stream=True) as response:
             if response.status_code == 401:
                 print("❌ Error: Unauthorized. Your token might have expired.")
+                sys.exit(1)
+            elif response.status_code == 403:
+                print("❌ Error: Execution denied. You are not approved in the host's lobby.")
                 sys.exit(1)
             elif response.status_code != 200:
                 print(f"❌ Error: Server returned status {response.status_code}.")
