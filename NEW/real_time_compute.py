@@ -87,10 +87,19 @@ def announce_loop(stop_event, name, port):
 
 
 def make_ws_handler(session_code):
+    """
+    Builds the connection handler for the compute server. Dispatches to one
+    of a few physics modes based on a 'game' field in the handshake (default
+    'gravity', for backward compatibility with clients that predate this --
+    they never send that field, so they're unaffected by any of this).
+    Each mode has its own physics_step + spawn function; the gravity mode's
+    functions are byte-for-byte what they always were.
+    """
     import torch
 
-    def physics_step(pos, vel, mouse_x, mouse_y, mouse_active, dt, chunk=1024,
-                      G=800.0, softening=4.0, damping=0.999, max_speed=400.0):
+    # --- mode: 'gravity' (Gravity Swarm / game.py) -- UNCHANGED from before ---
+    def gravity_physics_step(pos, vel, mouse_x, mouse_y, mouse_active, dt, chunk=1024,
+                              G=800.0, softening=4.0, damping=0.999, max_speed=400.0):
         N = pos.shape[0]
         device = pos.device
         accel = torch.zeros_like(pos)
@@ -121,10 +130,70 @@ def make_ws_handler(session_code):
         pos = torch.remainder(pos, torch.tensor([900.0, 900.0], device=pos.device))
         return pos, vel
 
-    def spawn_particles(n, device, width=900.0, height=900.0):
+    def spawn_gravity(n, device, width=900.0, height=900.0):
         pos = torch.rand(n, 2, device=device) * torch.tensor([width, height], device=device)
         vel = torch.zeros(n, 2, device=device)
         return pos, vel
+
+    # --- mode: 'dodge' (Swarm Dodge / dodge_swarm.py) -- new ---
+    def dodge_physics_step(pos, vel, player_x, player_y, dt, chunk=512,
+                            repel_strength=9000.0, repel_range=50.0,
+                            chase_speed=150.0, damping=0.995, max_speed=230.0):
+        N = pos.shape[0]
+        device = pos.device
+        accel = torch.zeros_like(pos)
+        idx_all = torch.arange(N, device=device)
+        for start in range(0, N, chunk):
+            end = min(start + chunk, N)
+            block = pos[start:end]
+            diff = block.unsqueeze(1) - pos.unsqueeze(0)               # (b, N, 2): away from neighbor
+            dist_sq = (diff * diff).sum(-1) + 1.0
+            dist = dist_sq.sqrt()
+            within = dist < repel_range
+            rows = torch.arange(end - start, device=device)
+            within[rows, idx_all[start:end]] = False
+            force_mag = torch.where(within, repel_strength / dist_sq, torch.zeros_like(dist_sq))
+            accel[start:end] = (diff / dist.unsqueeze(-1).clamp(min=1e-3) * force_mag.unsqueeze(-1)).sum(dim=1)
+
+        player = torch.tensor([player_x, player_y], device=device)
+        to_player = player.unsqueeze(0) - pos
+        dist_to_player = to_player.norm(dim=-1, keepdim=True).clamp(min=1e-3)
+        accel = accel + (to_player / dist_to_player) * chase_speed
+
+        vel = (vel + accel * dt) * damping
+        speed = vel.norm(dim=-1)
+        too_fast = speed > max_speed
+        if bool(too_fast.any()):
+            vel[too_fast] = vel[too_fast] * (max_speed / speed[too_fast]).unsqueeze(-1)
+        pos = pos + vel * dt
+        # soft clamp well beyond the visible window -- enemies chase the player
+        # so they never wander far, this just stops runaway edge cases
+        pos = torch.clamp(pos, torch.tensor([-300.0, -300.0], device=device), torch.tensor([1200.0, 1200.0], device=device))
+        return pos, vel
+
+    def spawn_dodge(n, device, width=900.0, height=900.0, margin=60.0):
+        if n == 0:
+            return torch.zeros(0, 2, device=device), torch.zeros(0, 2, device=device)
+        side = torch.randint(0, 4, (n,), device=device)
+        t = torch.rand(n, device=device)
+        x = torch.zeros(n, device=device)
+        y = torch.zeros(n, device=device)
+        m0 = side == 0  # top
+        x[m0], y[m0] = t[m0] * width, -margin
+        m1 = side == 1  # right
+        x[m1], y[m1] = width + margin, t[m1] * height
+        m2 = side == 2  # bottom
+        x[m2], y[m2] = t[m2] * width, height + margin
+        m3 = side == 3  # left
+        x[m3], y[m3] = -margin, t[m3] * height
+        pos = torch.stack([x, y], dim=1)
+        vel = torch.zeros(n, 2, device=device)
+        return pos, vel
+
+    MODES = {
+        'gravity': (gravity_physics_step, spawn_gravity),
+        'dodge': (dodge_physics_step, spawn_dodge),
+    }
 
     def handler(websocket):
         try:
@@ -138,31 +207,40 @@ def make_ws_handler(session_code):
                 pass
             print(f"[serve] rejected connection from {websocket.remote_address} (bad/missing code)")
             return
+
+        game_mode = first.get('game', 'gravity')
+        if game_mode not in MODES:
+            game_mode = 'gravity'
+        physics_fn, spawn_fn = MODES[game_mode]
+
         try:
             websocket.send(json.dumps({'status': 'approved'}))
         except Exception:
             return
 
         remote_addr = websocket.remote_address
-        print(f"[serve] client connected: {remote_addr}")
+        print(f"[serve] client connected: {remote_addr} (mode={game_mode})")
         device = 'cuda'
-        pos, vel = spawn_particles(0, device)
+        pos, vel = spawn_fn(0, device)
         n_frames = 0
         t_start = time.time()
         try:
             for message in websocket:
                 if not isinstance(message, (bytes, bytearray)) or len(message) != FRAME_IN_SIZE:
                     continue
-                mouse_x, mouse_y, mouse_active, dt, want_n = struct.unpack(FRAME_IN_FMT, message)
+                in_x, in_y, in_flag, dt, want_n = struct.unpack(FRAME_IN_FMT, message)
                 dt = min(dt, 1 / 15)  # clamp in case of a hiccup, avoid an unstable big step
 
                 if want_n > pos.shape[0]:
-                    extra_pos, extra_vel = spawn_particles(want_n - pos.shape[0], device)
+                    extra_pos, extra_vel = spawn_fn(want_n - pos.shape[0], device)
                     pos = torch.cat([pos, extra_pos], dim=0)
                     vel = torch.cat([vel, extra_vel], dim=0)
 
                 if pos.shape[0] > 0:
-                    pos, vel = physics_step(pos, vel, mouse_x, mouse_y, bool(mouse_active), dt)
+                    if game_mode == 'dodge':
+                        pos, vel = physics_fn(pos, vel, in_x, in_y, dt)
+                    else:
+                        pos, vel = physics_fn(pos, vel, in_x, in_y, bool(in_flag), dt)
 
                 websocket.send(pos.to(torch.float32).cpu().numpy().tobytes())
                 n_frames += 1
@@ -172,7 +250,7 @@ def make_ws_handler(session_code):
             elapsed = time.time() - t_start
             avg_fps = n_frames / elapsed if elapsed > 0 else 0
             print(f"[serve] client disconnected: {remote_addr} "
-                  f"({n_frames} frames, avg {avg_fps:.1f} fps served)")
+                  f"({n_frames} frames, avg {avg_fps:.1f} fps served, mode={game_mode})")
 
     return handler
 
