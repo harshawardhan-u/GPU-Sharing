@@ -230,6 +230,10 @@ class ComputeNexusApp(ctk.CTk):
         self.lan_code = None
         self.lan_port = None
 
+        self.rtcompute_announce_stop = None
+        self.rtcompute_server_obj = None
+        self.rtcompute_code = None
+
         self.build_auth_screen()
 
     # =========================================================================
@@ -262,7 +266,10 @@ class ComputeNexusApp(ctk.CTk):
         self.toggle_mode_btn.pack(pady=(20, 10))
 
         self.lan_link_btn = ctk.CTkButton(self.auth_frame, text="⚡ Connect Locally (Same Wi-Fi, No Internet)", fg_color="transparent", text_color="#f39c12", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.show_lan_screen)
-        self.lan_link_btn.pack(pady=(0, 20))
+        self.lan_link_btn.pack(pady=(0, 5))
+
+        self.rtcompute_link_btn = ctk.CTkButton(self.auth_frame, text="🎮 Real-Time Compute Setup (for game.py)", fg_color="transparent", text_color="#66c2ff", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.show_rtcompute_screen)
+        self.rtcompute_link_btn.pack(pady=(0, 20))
 
         self.switch_to_login_mode()
 
@@ -1345,6 +1352,238 @@ class ComputeNexusApp(ctk.CTk):
         self.build_main_workspace()
         self.show_join_frame()
         self.join_status.configure(text="✅ Connected via LAN! Run 'cloud-run <script.py>' from a terminal now.", text_color="#1DB954")
+
+    # =========================================================================
+    # REAL-TIME COMPUTE SETUP -- a separate screen for pairing with the
+    # real_time_compute.py server (game.py). This is a different protocol
+    # from the Docker/cloud-run system above (its own LAN discovery port/
+    # magic string, see real_time_compute.py), so it gets its own screen
+    # rather than being folded into "Connect Locally". The GUI only handles
+    # discovery + pairing here; running game.py itself still happens in a
+    # terminal, same as cloud-run.
+    # =========================================================================
+    def show_rtcompute_screen(self):
+        self.auth_frame.pack_forget()
+        if not hasattr(self, 'rtcompute_frame'):
+            self.build_rtcompute_screen()
+        self.rtcompute_frame.pack(expand=True, fill="both")
+
+    def back_to_signin_from_rtcompute(self):
+        self.rtcompute_frame.pack_forget()
+        self.auth_frame.pack(expand=True, fill="both")
+
+    def build_rtcompute_screen(self):
+        self.rtcompute_frame = ctk.CTkFrame(self, fg_color="#121212")
+
+        back_btn = ctk.CTkButton(self.rtcompute_frame, text="← Back to Sign In", fg_color="transparent", text_color="gray50", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.back_to_signin_from_rtcompute)
+        back_btn.pack(pady=(20, 0), anchor="w", padx=20)
+
+        logo = ctk.CTkLabel(self.rtcompute_frame, text="REAL-TIME COMPUTE SETUP", font=ctk.CTkFont(size=26, weight="bold"), text_color="#66c2ff")
+        logo.pack(pady=(10, 5))
+        sub = ctk.CTkLabel(self.rtcompute_frame, text="Pairs with real_time_compute.py for game.py. You still run 'python game.py'\nyourself afterward -- this just sets up the connection it will use.", text_color="gray50", font=ctk.CTkFont(size=12), justify="center")
+        sub.pack(pady=(0, 20))
+
+        tabs = ctk.CTkFrame(self.rtcompute_frame, fg_color="transparent")
+        tabs.pack(pady=(0, 15))
+        self.rtcompute_host_tab_btn = ctk.CTkButton(tabs, text="Host (GPU laptop)", width=180, command=self.show_rtcompute_host_pane)
+        self.rtcompute_host_tab_btn.grid(row=0, column=0, padx=5)
+        self.rtcompute_join_tab_btn = ctk.CTkButton(tabs, text="Join (non-GPU laptop)", width=180, command=self.show_rtcompute_join_pane, fg_color="transparent", border_width=2, text_color=("#121212", "#DCE4EE"))
+        self.rtcompute_join_tab_btn.grid(row=0, column=1, padx=5)
+
+        self.rtcompute_pane_container = ctk.CTkFrame(self.rtcompute_frame, fg_color="transparent")
+        self.rtcompute_pane_container.pack(expand=True, fill="both", padx=40)
+
+        # --- Host pane ---
+        self.rtcompute_host_pane = ctk.CTkFrame(self.rtcompute_pane_container, fg_color="transparent")
+
+        self.rtcompute_host_status = ctk.CTkLabel(self.rtcompute_host_pane, text="Ready to serve real-time GPU compute.", text_color="gray60", font=ctk.CTkFont(size=13))
+        self.rtcompute_host_status.pack(pady=(10, 5))
+
+        self.rtcompute_start_btn = ctk.CTkButton(self.rtcompute_host_pane, text="⚡ Start Real-Time Compute Server", height=45, width=320, command=self.start_rtcompute_server)
+        self.rtcompute_start_btn.pack(pady=8)
+
+        self.rtcompute_code_label = ctk.CTkLabel(self.rtcompute_host_pane, text="", font=ctk.CTkFont(size=34, weight="bold"), text_color="#1DB954")
+        self.rtcompute_info_label = ctk.CTkLabel(self.rtcompute_host_pane, text="", font=ctk.CTkFont(size=13, weight="bold"), text_color="#66c2ff", justify="center")
+        self.rtcompute_stop_btn = ctk.CTkButton(self.rtcompute_host_pane, text="Stop Server", height=40, width=320, fg_color="#E22134", hover_color="#B01625", command=self.stop_rtcompute_server)
+
+        # --- Join pane ---
+        self.rtcompute_join_pane = ctk.CTkFrame(self.rtcompute_pane_container, fg_color="transparent")
+
+        self.rtcompute_scan_btn = ctk.CTkButton(self.rtcompute_join_pane, text="🔍 Scan for Nearby Hosts", height=38, width=320, command=self.scan_rtcompute_hosts)
+        self.rtcompute_scan_btn.pack(pady=(15, 8))
+
+        self.rtcompute_scan_results = ctk.CTkFrame(self.rtcompute_join_pane, fg_color="transparent", width=320)
+        self.rtcompute_scan_results.pack(pady=2, fill="x")
+
+        self.rtcompute_ip_entry = ctk.CTkEntry(self.rtcompute_join_pane, width=320, height=40, placeholder_text="Host IP:Port (auto-filled, or type it)")
+        self.rtcompute_ip_entry.pack(pady=8)
+
+        self.rtcompute_code_entry = ctk.CTkEntry(self.rtcompute_join_pane, width=320, height=40, placeholder_text="6-Digit Code from Host", font=ctk.CTkFont(size=16, weight="bold"), justify="center")
+        self.rtcompute_code_entry.pack(pady=8)
+
+        self.rtcompute_join_status = ctk.CTkLabel(self.rtcompute_join_pane, text="", text_color="gray60", font=ctk.CTkFont(size=13), wraplength=320, justify="center")
+        self.rtcompute_join_status.pack(pady=5)
+
+        self.rtcompute_save_btn = ctk.CTkButton(self.rtcompute_join_pane, text="✅ Verify & Save Connection", height=45, width=320, command=self.verify_and_save_rtcompute)
+        self.rtcompute_save_btn.pack(pady=8)
+
+        self.show_rtcompute_host_pane()
+
+    def show_rtcompute_host_pane(self):
+        self.rtcompute_join_pane.pack_forget()
+        self.rtcompute_host_pane.pack(expand=True, fill="both")
+        self.rtcompute_host_tab_btn.configure(fg_color=["#3b8ed0", "#1f538d"])
+        self.rtcompute_join_tab_btn.configure(fg_color="transparent")
+
+    def show_rtcompute_join_pane(self):
+        self.rtcompute_host_pane.pack_forget()
+        self.rtcompute_join_pane.pack(expand=True, fill="both")
+        self.rtcompute_join_tab_btn.configure(fg_color=["#3b8ed0", "#1f538d"])
+        self.rtcompute_host_tab_btn.configure(fg_color="transparent")
+
+    # --- Host side (GPU laptop) ---
+    def start_rtcompute_server(self):
+        self.rtcompute_start_btn.configure(state="disabled")
+        self.rtcompute_host_status.configure(text="Checking for an NVIDIA GPU...", text_color="#f39c12")
+        threading.Thread(target=self._rtcompute_server_worker, daemon=True).start()
+
+    def _rtcompute_server_worker(self):
+        import real_time_compute as rtc
+
+        has_gpu, gpu_name = rtc.check_nvidia_gpu()
+        if not has_gpu:
+            self.after(0, lambda: self.rtcompute_host_status.configure(text="❌ No NVIDIA GPU detected on this machine.", text_color="#E22134"))
+            self.after(0, lambda: self.rtcompute_start_btn.configure(state="normal"))
+            return
+
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                self.after(0, lambda: self.rtcompute_host_status.configure(text="❌ PyTorch can't see CUDA on this machine.", text_color="#E22134"))
+                self.after(0, lambda: self.rtcompute_start_btn.configure(state="normal"))
+                return
+        except ImportError:
+            self.after(0, lambda: self.rtcompute_host_status.configure(text="❌ PyTorch isn't installed (needed to serve compute).", text_color="#E22134"))
+            self.after(0, lambda: self.rtcompute_start_btn.configure(state="normal"))
+            return
+
+        session_code = ''.join(secrets.choice('0123456789') for _ in range(6))
+        self.rtcompute_code = session_code
+        self.rtcompute_announce_stop = threading.Event()
+        host_name = socket.gethostname()
+        threading.Thread(target=rtc.announce_loop, args=(self.rtcompute_announce_stop, host_name, rtc.DEFAULT_PORT), daemon=True).start()
+
+        self.after(0, self.show_rtcompute_host_success, session_code, gpu_name, rtc.DEFAULT_PORT)
+
+        handler = rtc.make_ws_handler(session_code)
+        from websockets.sync.server import serve
+        try:
+            with serve(handler, '0.0.0.0', rtc.DEFAULT_PORT, max_size=None) as server:
+                self.rtcompute_server_obj = server
+                server.serve_forever()
+        except Exception as e:
+            self.after(0, lambda err=e: self.rtcompute_host_status.configure(text=f"❌ Server error: {err}", text_color="#E22134"))
+        finally:
+            self.rtcompute_server_obj = None
+
+    def show_rtcompute_host_success(self, code, gpu_name, port):
+        ip = self.get_lan_ip()
+        self.rtcompute_host_status.configure(text=f"🟢 Live on GPU: {gpu_name}", text_color="#1DB954")
+        self.rtcompute_start_btn.pack_forget()
+        self.rtcompute_code_label.configure(text=code)
+        self.rtcompute_code_label.pack(pady=5)
+        self.rtcompute_info_label.configure(text=f"IP: {ip}   Port: {port}\nOn the non-GPU laptop: Real-Time Compute Setup -> Join")
+        self.rtcompute_info_label.pack(pady=(0, 10))
+        self.rtcompute_stop_btn.pack(pady=10)
+
+    def stop_rtcompute_server(self):
+        if self.rtcompute_announce_stop:
+            self.rtcompute_announce_stop.set()
+            self.rtcompute_announce_stop = None
+        if self.rtcompute_server_obj:
+            try:
+                self.rtcompute_server_obj.shutdown()
+            except Exception:
+                pass
+            self.rtcompute_server_obj = None
+        self.reset_rtcompute_host_ui()
+
+    def reset_rtcompute_host_ui(self):
+        self.rtcompute_code_label.pack_forget()
+        self.rtcompute_info_label.pack_forget()
+        self.rtcompute_stop_btn.pack_forget()
+        self.rtcompute_start_btn.pack(pady=8)
+        self.rtcompute_start_btn.configure(state="normal")
+        self.rtcompute_host_status.configure(text="Ready to serve real-time GPU compute.", text_color="gray60")
+
+    # --- Join side (non-GPU laptop) ---
+    def scan_rtcompute_hosts(self):
+        self.rtcompute_scan_btn.configure(state="disabled", text="Scanning...")
+        for w in self.rtcompute_scan_results.winfo_children():
+            w.destroy()
+        threading.Thread(target=self._scan_rtcompute_worker, daemon=True).start()
+
+    def _scan_rtcompute_worker(self):
+        import real_time_compute as rtc
+        hosts = rtc.discover_hosts(timeout=3.0)
+        self.after(0, self._populate_rtcompute_results, hosts)
+
+    def _populate_rtcompute_results(self, hosts):
+        self.rtcompute_scan_btn.configure(state="normal", text="🔍 Scan for Nearby Hosts")
+        for w in self.rtcompute_scan_results.winfo_children():
+            w.destroy()
+
+        if not hosts:
+            lbl = ctk.CTkLabel(self.rtcompute_scan_results, text="No hosts found. Enter IP manually below.", text_color="gray50", font=ctk.CTkFont(size=11, slant="italic"))
+            lbl.pack(pady=2)
+            return
+
+        for h in hosts:
+            btn = ctk.CTkButton(self.rtcompute_scan_results, text=f"{h.get('name', '?')}  @  {h['ip']}", height=32, fg_color="#262626", hover_color="#333333",
+                                 command=lambda ip=h['ip'], port=h.get('port', 47612): self.select_rtcompute_host(ip, port))
+            btn.pack(pady=2, fill="x")
+
+    def select_rtcompute_host(self, ip, port):
+        self.rtcompute_ip_entry.delete(0, 'end')
+        self.rtcompute_ip_entry.insert(0, f"{ip}:{port}")
+
+    def verify_and_save_rtcompute(self):
+        target = self.rtcompute_ip_entry.get().strip()
+        code = self.rtcompute_code_entry.get().strip()
+
+        if not target or ':' not in target:
+            self.rtcompute_join_status.configure(text="❌ Enter a valid Host IP:Port (scan or type it).", text_color="#E22134")
+            return
+        if len(code) != 6 or not code.isdigit():
+            self.rtcompute_join_status.configure(text="❌ Enter the 6-digit code from the host.", text_color="#E22134")
+            return
+
+        self.rtcompute_save_btn.configure(state="disabled")
+        self.rtcompute_join_status.configure(text="🔍 Verifying...", text_color="#f39c12")
+        threading.Thread(target=self._verify_and_save_rtcompute_worker, args=(target, code), daemon=True).start()
+
+    def _verify_and_save_rtcompute_worker(self, target, code):
+        try:
+            ip, port = target.split(':', 1)
+            from websockets.sync.client import connect
+            url = f"ws://{ip}:{port}"
+            with connect(url, open_timeout=5) as ws:
+                ws.send(json.dumps({'code': code}))
+                ack = json.loads(ws.recv(timeout=5))
+                if ack.get('status') != 'approved':
+                    self.after(0, lambda: self.rtcompute_join_status.configure(text="❌ Incorrect code.", text_color="#E22134"))
+                    self.after(0, lambda: self.rtcompute_save_btn.configure(state="normal"))
+                    return
+
+            config_path = os.path.expanduser("~/.rtcompute_config.json")
+            with open(config_path, "w") as f:
+                json.dump({"host": ip, "port": int(port), "code": code}, f)
+
+            self.after(0, lambda: self.rtcompute_join_status.configure(text="✅ Saved! Now run 'python game.py' in a terminal.", text_color="#1DB954"))
+            self.after(0, lambda: self.rtcompute_save_btn.configure(state="normal"))
+        except Exception as e:
+            self.after(0, lambda err=e: self.rtcompute_join_status.configure(text=f"❌ {err}", text_color="#E22134"))
+            self.after(0, lambda: self.rtcompute_save_btn.configure(state="normal"))
 
     def on_closing(self):
         # Wrap everything in a try...finally block. 

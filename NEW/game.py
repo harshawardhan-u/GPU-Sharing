@@ -96,6 +96,20 @@ def try_connect_remote():
     host = os.environ.get('RTCOMPUTE_HOST')
     port = os.environ.get('RTCOMPUTE_PORT')
     code = os.environ.get('RTCOMPUTE_CODE')
+
+    if not (host and port and code):
+        # No env vars (i.e. not launched via `real_time_compute.py game.py`)
+        # -- fall back to a connection saved by the dashboard's "Real-Time
+        # Compute Setup" pairing screen, if there is one.
+        config_path = os.path.expanduser("~/.rtcompute_config.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r") as f:
+                    cfg = json.load(f)
+                host, port, code = cfg.get('host'), cfg.get('port'), cfg.get('code')
+            except Exception:
+                host = port = code = None
+
     if not (host and port and code):
         return None
 
