@@ -2,7 +2,6 @@ import sys
 import os
 import json
 import base64
-import subprocess
 import requests
 
 # Some Windows terminals default to a legacy codepage (e.g. cp1252) that
@@ -76,26 +75,6 @@ class StreamFileCapture:
         except Exception as e:
             print(f"❌ Failed to decode/save received file: {e}")
 
-def run_play_demo():
-    """
-    'cloud-run game.py' is a different kind of job than the text-streaming
-    path below: the live GPU-rendered scene needs real-time video + input,
-    not stdout. This launches remote_play/client.py, which auto-discovers
-    the GPU host on the LAN and prompts for its pairing code.
-    """
-    if getattr(sys, 'frozen', False):
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-
-    client_script = os.path.join(base_dir, "remote_play", "client.py")
-    if not os.path.exists(client_script):
-        print("❌ Error: remote_play/client.py not found next to cloud_run.py.")
-        sys.exit(1)
-
-    result = subprocess.run([sys.executable, client_script], cwd=os.path.dirname(client_script))
-    sys.exit(result.returncode)
-
 def main():
     if len(sys.argv) < 2:
         print("Usage: cloud-run <script.py>")
@@ -106,10 +85,6 @@ def main():
     if not os.path.exists(target_file):
         print(f"❌ Error: File '{target_file}' not found.")
         sys.exit(1)
-
-    if os.path.basename(target_file).lower() == "game.py":
-        run_play_demo()
-        return
 
     # Load connection credentials
     config_path = os.path.expanduser("~/.gpu_share_config.json")
