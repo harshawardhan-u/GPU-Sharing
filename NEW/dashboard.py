@@ -12,6 +12,9 @@ import webbrowser   # <-- NEW: Used to open download links in the browser
 import urllib.request # <-- NEW: For auto-downloading Cloudflared
 import winreg
 import sys
+import base64
+import io
+from PIL import Image
 
 # =========================================================================
 # CONFIGURATION: YOUR VERIFIED FIREBASE SETTINGS
@@ -115,6 +118,11 @@ class ComputeNexusApp(ctk.CTk):
         self.id_token = None
         
         self.profile_modal_frame = None
+
+        self._demo_section_revealed = False
+        self._demo_running = False
+        self._last_render_path = None
+
         self.build_auth_screen()
 
     # =========================================================================
@@ -429,6 +437,31 @@ class ComputeNexusApp(ctk.CTk):
         self.join_btn = ctk.CTkButton(self.join_frame, text="Join Room Lobby", height=45, width=280, command=self.handle_join)
         self.join_btn.pack(pady=10)
 
+        # Revealed once the host approves this client (see monitor_kick_status)
+        self.demo_section = ctk.CTkFrame(self.join_frame, fg_color="#1a1a1a", corner_radius=10)
+        self.demo_section.columnconfigure(0, weight=1)
+        self.demo_section.columnconfigure(1, weight=1)
+
+        demo_label = ctk.CTkLabel(self.demo_section, text="Run a workload on the host's GPU", font=ctk.CTkFont(size=15, weight="bold"))
+        demo_label.grid(row=0, column=0, columnspan=2, padx=15, pady=(15, 8), sticky="w")
+
+        self.matmul_btn = ctk.CTkButton(self.demo_section, text="🎲 Matrix Multiply (5000x5000)", height=38, fg_color="#333333", hover_color="#444444",
+                                         command=lambda: self.run_demo_script("train_model.py", "Matrix Multiply"))
+        self.matmul_btn.grid(row=1, column=0, padx=(15, 5), pady=5, sticky="ew")
+
+        self.raytrace_btn = ctk.CTkButton(self.demo_section, text="🎨 GPU Ray Tracer", height=38,
+                                           command=lambda: self.run_demo_script("gpu_raytracer.py", "GPU Ray Tracer"))
+        self.raytrace_btn.grid(row=1, column=1, padx=(5, 15), pady=5, sticky="ew")
+
+        self.demo_output_box = ctk.CTkTextbox(self.demo_section, height=130, font=ctk.CTkFont(family="Courier", size=11))
+        self.demo_output_box.grid(row=2, column=0, columnspan=2, padx=15, pady=10, sticky="nsew")
+        self.demo_output_box.configure(state="disabled")
+
+        self.demo_image_label = ctk.CTkLabel(self.demo_section, text="", fg_color="#0d0d0d", corner_radius=8)
+        self.demo_image_label.grid(row=3, column=0, columnspan=2, padx=15, pady=(0, 5), sticky="nsew")
+
+        self.open_render_btn = ctk.CTkButton(self.demo_section, text="📂 Open Full-Resolution Image", height=32, command=self.open_full_render)
+
     def build_host_frame(self):
         self.host_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         self.host_frame.columnconfigure(0, weight=1)
@@ -547,6 +580,9 @@ class ComputeNexusApp(ctk.CTk):
                     status = res.json().get("fields", {}).get("status", {}).get("stringValue", "pending")
                     if status == "approved":
                         self.after(0, lambda: self.join_status.configure(text="✅ Access Verified! Secure connection to Node active.", text_color="#1DB954"))
+                        if not self._demo_section_revealed:
+                            self._demo_section_revealed = True
+                            self.after(0, self.reveal_demo_section)
             except Exception: pass
             time.sleep(3)
 
@@ -878,6 +914,153 @@ class ComputeNexusApp(ctk.CTk):
         if self.current_pin:
             self.clipboard_clear()
             self.clipboard_append(self.current_pin)
+
+    # =========================================================================
+    # RUN DEMO WORKLOAD (client side) -- same /execute channel used by the
+    # cloud-run CLI, just driven from the GUI with a textbox + image preview
+    # instead of a terminal.
+    # =========================================================================
+    def reveal_demo_section(self):
+        self.demo_section.pack(pady=(20, 10), fill="both", expand=True, padx=10)
+
+    def run_demo_script(self, filename, display_name):
+        if self._demo_running:
+            return
+
+        config_path = os.path.expanduser("~/.gpu_share_config.json")
+        if not os.path.exists(config_path):
+            self.append_demo_output("❌ Not connected to a host yet.\n")
+            return
+
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+        else:
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(app_dir, filename)
+        if not os.path.exists(script_path):
+            self.append_demo_output(f"❌ {filename} not found next to dashboard.py.\n")
+            return
+
+        self._demo_running = True
+        self.matmul_btn.configure(state="disabled")
+        self.raytrace_btn.configure(state="disabled")
+        self.open_render_btn.grid_forget()
+        self.demo_image_label.configure(image=None, text="")
+
+        self.demo_output_box.configure(state="normal")
+        self.demo_output_box.delete("1.0", "end")
+        self.demo_output_box.insert("end", f"▶ Running {display_name} ({filename}) on the remote GPU...\n\n")
+        self.demo_output_box.configure(state="disabled")
+
+        threading.Thread(target=self._run_demo_worker, args=(script_path, filename), daemon=True).start()
+
+    def _run_demo_worker(self, script_path, filename):
+        try:
+            with open(os.path.expanduser("~/.gpu_share_config.json"), "r") as f:
+                config = json.load(f)
+            url = config.get("url")
+            api_key = config.get("api_key")
+            client_name = config.get("client_name", "Unknown")
+            if not url or not api_key:
+                self.after(0, self.append_demo_output, "❌ Invalid connection config. Join the room again.\n")
+                return
+
+            with open(script_path, "r", encoding="utf-8") as f:
+                script_content = f.read()
+
+            payload = {"client_name": client_name, "target_file": filename, "script_content": script_content}
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+            buffer = ""
+            capturing = False
+            capture_name = None
+            capture_chunks = []
+
+            with requests.post(f"{url}/execute", json=payload, headers=headers, stream=True, timeout=(10, 300)) as response:
+                if response.status_code == 403:
+                    self.after(0, self.append_demo_output, "❌ Denied - you are not approved in the host's lobby yet.\n")
+                    return
+                if response.status_code != 200:
+                    self.after(0, self.append_demo_output, f"❌ Server returned status {response.status_code}.\n")
+                    return
+
+                for chunk in response.iter_content(chunk_size=None):
+                    if not chunk:
+                        continue
+                    buffer += chunk.decode('utf-8', errors='replace')
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        stripped = line.rstrip("\r")
+                        if not capturing:
+                            if stripped.startswith("##CLOUDRUN_FILE_START:") and stripped.endswith("##"):
+                                capture_name = stripped[len("##CLOUDRUN_FILE_START:"):-2]
+                                capturing = True
+                                capture_chunks = []
+                                self.after(0, self.append_demo_output, f"\n📦 Receiving {capture_name} ...\n")
+                            else:
+                                self.after(0, self.append_demo_output, line + "\n")
+                        else:
+                            if stripped == "##CLOUDRUN_FILE_END##":
+                                try:
+                                    data = base64.b64decode("".join(capture_chunks))
+                                    self.after(0, self.show_demo_image, data, capture_name)
+                                except Exception as e:
+                                    self.after(0, self.append_demo_output, f"❌ Failed to decode received file: {e}\n")
+                                capturing = False
+                            else:
+                                capture_chunks.append(stripped)
+
+            self.after(0, self.append_demo_output, "\n✔ Done.\n")
+        except requests.exceptions.RequestException as e:
+            self.after(0, self.append_demo_output, f"\n❌ Connection Error: {e}\n")
+        except Exception as e:
+            self.after(0, self.append_demo_output, f"\n❌ Unexpected error: {e}\n")
+        finally:
+            self.after(0, self._demo_finished)
+
+    def append_demo_output(self, text):
+        self.demo_output_box.configure(state="normal")
+        self.demo_output_box.insert("end", text)
+        self.demo_output_box.see("end")
+        self.demo_output_box.configure(state="disabled")
+
+    def show_demo_image(self, image_bytes, filename):
+        try:
+            pil_img = Image.open(io.BytesIO(image_bytes))
+            pil_img.load()
+        except Exception as e:
+            self.append_demo_output(f"❌ Could not open received image: {e}\n")
+            return
+
+        out_dir = os.path.expanduser("~/ComputeNexus_Renders")
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, filename)
+            pil_img.save(out_path)
+            self._last_render_path = out_path
+        except Exception:
+            self._last_render_path = None
+
+        preview = pil_img.copy()
+        preview.thumbnail((520, 300))
+        ctk_img = ctk.CTkImage(light_image=preview, dark_image=preview, size=preview.size)
+        self.demo_image_label.configure(image=ctk_img, text="")
+        self._demo_image_ref = ctk_img  # keep a reference so Tk doesn't garbage-collect it
+
+        if self._last_render_path:
+            self.open_render_btn.grid(row=4, column=0, columnspan=2, padx=15, pady=(0, 15), sticky="ew")
+
+    def _demo_finished(self):
+        self._demo_running = False
+        self.matmul_btn.configure(state="normal")
+        self.raytrace_btn.configure(state="normal")
+
+    def open_full_render(self):
+        if self._last_render_path and os.path.exists(self._last_render_path):
+            try:
+                os.startfile(self._last_render_path)
+            except Exception:
+                pass
 
     def on_closing(self):
         # Wrap everything in a try...finally block. 

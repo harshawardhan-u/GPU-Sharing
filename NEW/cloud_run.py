@@ -1,8 +1,80 @@
 import sys
 import os
 import json
+import base64
 import subprocess
 import requests
+
+# Some Windows terminals default to a legacy codepage (e.g. cp1252) that
+# can't encode emoji, which would otherwise crash mid-stream on any of the
+# print statements below (existing ones included).
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
+
+FILE_START_PREFIX = "##CLOUDRUN_FILE_START:"
+FILE_END_MARKER = "##CLOUDRUN_FILE_END##"
+
+class StreamFileCapture:
+    """
+    Processes the streamed stdout line-by-line, watching for
+    ##CLOUDRUN_FILE_START:<name>## ... base64 ... ##CLOUDRUN_FILE_END##
+    blocks that a script (e.g. gpu_raytracer.py) can emit to send a
+    generated file back over the same text channel. Normal lines print
+    live exactly as before; a captured block is decoded and saved to disk
+    instead of being dumped as raw base64 text.
+    """
+    def __init__(self):
+        self.buffer = ""
+        self.capturing = False
+        self.capture_name = None
+        self.capture_chunks = []
+        self.saved_files = []
+
+    def feed(self, text_chunk):
+        self.buffer += text_chunk
+        while "\n" in self.buffer:
+            line, self.buffer = self.buffer.split("\n", 1)
+            self._handle_line(line)
+
+    def finish(self):
+        if self.buffer:
+            self._handle_line(self.buffer)
+            self.buffer = ""
+
+    def _handle_line(self, line):
+        stripped = line.rstrip("\r")
+        if not self.capturing:
+            if stripped.startswith(FILE_START_PREFIX) and stripped.endswith("##"):
+                self.capture_name = stripped[len(FILE_START_PREFIX):-2]
+                self.capturing = True
+                self.capture_chunks = []
+                print(f"\n📦 Receiving generated file: {self.capture_name} ...")
+            else:
+                print(line)
+        else:
+            if stripped == FILE_END_MARKER:
+                self._save_capture()
+                self.capturing = False
+            else:
+                self.capture_chunks.append(stripped)
+
+    def _save_capture(self):
+        try:
+            data = base64.b64decode("".join(self.capture_chunks))
+            out_path = os.path.join(os.getcwd(), self.capture_name)
+            with open(out_path, "wb") as f:
+                f.write(data)
+            print(f"✅ Saved: {out_path}")
+            self.saved_files.append(out_path)
+            if os.name == 'nt':
+                try:
+                    os.startfile(out_path)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"❌ Failed to decode/save received file: {e}")
 
 def run_play_demo():
     """
@@ -89,12 +161,14 @@ def main():
                 print(f"❌ Error: Server returned status {response.status_code}.")
                 sys.exit(1)
 
-            # 3. Read raw chunks from the network and print instantly
+            # 3. Read raw chunks from the network, print instantly, and
+            #    transparently capture any file the script sends back.
+            capture = StreamFileCapture()
             for chunk in response.iter_content(chunk_size=None):
                 if chunk:
-                    # Safely decode the raw binary stream for the Windows terminal
-                    sys.stdout.write(chunk.decode('utf-8', errors='replace'))
+                    capture.feed(chunk.decode('utf-8', errors='replace'))
                     sys.stdout.flush()
+            capture.finish()
 
     except requests.exceptions.RequestException as e:
         print(f"\n❌ Connection Error: {e}")
