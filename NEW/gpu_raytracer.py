@@ -274,6 +274,14 @@ def main():
 
     if not args.no_send:
         send_file_over_stdout(args.out)
+    elif sys.platform == 'win32':
+        # Running standalone (not through cloud-run) -- open it directly so
+        # there's nothing to go hunting for during a live demo.
+        import os
+        try:
+            os.startfile(os.path.abspath(args.out))
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
