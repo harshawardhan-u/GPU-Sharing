@@ -6,5 +6,7 @@ Pillow
 numpy
 pygame
 websockets
+# For the GPU Pool (pool_compute.py / pool_swarm.py), any GPU vendor:
+pyopencl
 # On the GPU laptop only, for real_time_compute.py --serve:
 #   torch  (with a +cuXXX build, e.g. pip install torch --index-url https://download.pytorch.org/whl/cu121)

@@ -269,7 +269,10 @@ class ComputeNexusApp(ctk.CTk):
         self.lan_link_btn.pack(pady=(0, 5))
 
         self.rtcompute_link_btn = ctk.CTkButton(self.auth_frame, text="🎮 Real-Time Compute Setup (for game.py)", fg_color="transparent", text_color="#66c2ff", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.show_rtcompute_screen)
-        self.rtcompute_link_btn.pack(pady=(0, 20))
+        self.rtcompute_link_btn.pack(pady=(0, 5))
+
+        self.pool_link_btn = ctk.CTkButton(self.auth_frame, text="🧩 GPU Pool (multi-GPU demo)", fg_color="transparent", text_color="#eb6834", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.show_pool_screen)
+        self.pool_link_btn.pack(pady=(0, 20))
 
         self.switch_to_login_mode()
 
@@ -1585,8 +1588,194 @@ class ComputeNexusApp(ctk.CTk):
             self.after(0, lambda err=e: self.rtcompute_join_status.configure(text=f"❌ {err}", text_color="#E22134"))
             self.after(0, lambda: self.rtcompute_save_btn.configure(state="normal"))
 
+    # =========================================================================
+    # GPU POOL -- runs pool_compute.py (share this laptop's GPUs) and
+    # pool_swarm.py (the pooled game) as child processes, so the whole
+    # multi-GPU demo can be driven from here without a terminal.
+    # =========================================================================
+    POOL_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    def show_pool_screen(self):
+        self.auth_frame.pack_forget()
+        if not hasattr(self, 'pool_frame'):
+            self.build_pool_screen()
+        self.pool_frame.pack(expand=True, fill="both")
+
+    def back_to_signin_from_pool(self):
+        self.pool_frame.pack_forget()
+        self.auth_frame.pack(expand=True, fill="both")
+
+    def build_pool_screen(self):
+        self.pool_proc = None
+        self.game_proc = None
+        self.pool_frame = ctk.CTkFrame(self, fg_color="#121212")
+
+        back_btn = ctk.CTkButton(self.pool_frame, text="← Back to Sign In", fg_color="transparent", text_color="gray50", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.back_to_signin_from_pool)
+        back_btn.pack(pady=(20, 0), anchor="w", padx=20)
+
+        ctk.CTkLabel(self.pool_frame, text="GPU POOL", font=ctk.CTkFont(size=26, weight="bold"), text_color="#eb6834").pack(pady=(10, 5))
+        ctk.CTkLabel(self.pool_frame, text="Every GPU on every laptop (NVIDIA, Intel, AMD) works on one game together.\nWork is shared by speed, moves away from lost or cheating GPUs, and comes back when they return.", text_color="gray50", font=ctk.CTkFont(size=12), justify="center").pack(pady=(0, 15))
+
+        tabs = ctk.CTkFrame(self.pool_frame, fg_color="transparent")
+        tabs.pack(pady=(0, 10))
+        self.pool_host_tab_btn = ctk.CTkButton(tabs, text="Share My GPUs", width=180, command=self.show_pool_host_pane)
+        self.pool_host_tab_btn.grid(row=0, column=0, padx=5)
+        self.pool_play_tab_btn = ctk.CTkButton(tabs, text="Play Pooled Game", width=180, command=self.show_pool_play_pane, fg_color="transparent", border_width=2, text_color=("#121212", "#DCE4EE"))
+        self.pool_play_tab_btn.grid(row=0, column=1, padx=5)
+
+        container = ctk.CTkFrame(self.pool_frame, fg_color="transparent")
+        container.pack(expand=True, fill="both", padx=40)
+
+        # --- Share pane ---
+        self.pool_host_pane = ctk.CTkFrame(container, fg_color="transparent")
+        self.pool_host_status = ctk.CTkLabel(self.pool_host_pane, text="Share this laptop's GPUs with the pool.", text_color="gray60", font=ctk.CTkFont(size=13))
+        self.pool_host_status.pack(pady=(5, 5))
+        self.pool_code_input = ctk.CTkEntry(self.pool_host_pane, width=320, height=38, placeholder_text="Pairing code (leave empty for a random one)", justify="center")
+        self.pool_code_input.pack(pady=5)
+        self.pool_start_btn = ctk.CTkButton(self.pool_host_pane, text="⚡ Start Sharing", height=42, width=320, command=self.start_pool_sharing)
+        self.pool_start_btn.pack(pady=5)
+        self.pool_code_label = ctk.CTkLabel(self.pool_host_pane, text="", font=ctk.CTkFont(size=32, weight="bold"), text_color="#1DB954")
+        self.pool_gpu_rows = ctk.CTkFrame(self.pool_host_pane, fg_color="#1a1a1a", corner_radius=8)
+        self.pool_stop_btn = ctk.CTkButton(self.pool_host_pane, text="Stop Sharing", height=38, width=320, fg_color="#E22134", hover_color="#B01625", command=self.stop_pool_sharing)
+        self.pool_log = ctk.CTkTextbox(self.pool_host_pane, height=110, width=520, font=ctk.CTkFont(family="Consolas", size=11))
+
+        # --- Play pane ---
+        self.pool_play_pane = ctk.CTkFrame(container, fg_color="transparent")
+        ctk.CTkLabel(self.pool_play_pane, text="Pooled Gravity Swarm", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(10, 5))
+        self.pool_play_code = ctk.CTkEntry(self.pool_play_pane, width=320, height=40, placeholder_text="Code shown on the sharing laptop(s)", font=ctk.CTkFont(size=16, weight="bold"), justify="center")
+        self.pool_play_code.pack(pady=8)
+        ctk.CTkLabel(self.pool_play_pane, text="Particles", text_color="gray60").pack(pady=(6, 0))
+        self.pool_n_choice = ctk.CTkSegmentedButton(self.pool_play_pane, values=["10000", "20000", "30000", "50000"])
+        self.pool_n_choice.set("30000")
+        self.pool_n_choice.pack(pady=5)
+        self.pool_local_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(self.pool_play_pane, text="Also use this laptop's own GPU directly\n(leave off if this laptop is already sharing)", variable=self.pool_local_var).pack(pady=8)
+        self.pool_play_status = ctk.CTkLabel(self.pool_play_pane, text="", text_color="gray60", font=ctk.CTkFont(size=13), wraplength=420, justify="center")
+        self.pool_play_status.pack(pady=5)
+        self.pool_launch_btn = ctk.CTkButton(self.pool_play_pane, text="🎮 Launch Game", height=45, width=320, command=self.launch_pool_game)
+        self.pool_launch_btn.pack(pady=8)
+        ctk.CTkLabel(self.pool_play_pane, text="In the game: hold mouse = attract,  E / Q = more / fewer particles,  Esc = quit", text_color="gray50", font=ctk.CTkFont(size=11)).pack(pady=(4, 0))
+
+        self.show_pool_host_pane()
+
+    def show_pool_host_pane(self):
+        self.pool_play_pane.pack_forget()
+        self.pool_host_pane.pack(expand=True, fill="both")
+        self.pool_host_tab_btn.configure(fg_color=["#3b8ed0", "#1f538d"])
+        self.pool_play_tab_btn.configure(fg_color="transparent")
+
+    def show_pool_play_pane(self):
+        self.pool_host_pane.pack_forget()
+        self.pool_play_pane.pack(expand=True, fill="both")
+        self.pool_play_tab_btn.configure(fg_color=["#3b8ed0", "#1f538d"])
+        self.pool_host_tab_btn.configure(fg_color="transparent")
+
+    def _pool_python(self):
+        return sys.executable if not getattr(sys, 'frozen', False) else "python"
+
+    def _pool_creationflags(self):
+        return subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+
+    # --- Share side ---
+    def start_pool_sharing(self):
+        try:
+            from pool_kernels import list_gpus, short_name
+            gpus = list_gpus()
+        except Exception:
+            gpus = []
+        if not gpus:
+            self.pool_host_status.configure(text="❌ No GPU found through OpenCL. Run: pip install pyopencl", text_color="#E22134")
+            return
+        code = self.pool_code_input.get().strip()
+        if code and (len(code) != 6 or not code.isdigit()):
+            self.pool_host_status.configure(text="❌ The code must be 6 digits (or leave it empty).", text_color="#E22134")
+            return
+        code = code or "".join(secrets.choice("0123456789") for _ in range(6))
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONWARNINGS"] = "ignore"
+        self.pool_proc = subprocess.Popen(
+            [self._pool_python(), "-u", "pool_compute.py", "--serve", "--code", code],
+            cwd=self.POOL_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", env=env, creationflags=self._pool_creationflags())
+        threading.Thread(target=self._pool_read_log, args=(self.pool_proc,), daemon=True).start()
+
+        self.pool_start_btn.pack_forget()
+        self.pool_code_input.pack_forget()
+        self.pool_host_status.configure(text=f"🟢 Sharing {len(gpus)} GPU(s) on {self.get_lan_ip()}  —  give this code to players:", text_color="#1DB954")
+        self.pool_code_label.configure(text=code)
+        self.pool_code_label.pack(pady=2)
+        for w in self.pool_gpu_rows.winfo_children():
+            w.destroy()
+        for i, dev in enumerate(gpus):
+            row = ctk.CTkFrame(self.pool_gpu_rows, fg_color="transparent")
+            row.pack(fill="x", padx=12, pady=4)
+            ctk.CTkLabel(row, text=f"[{i}]  {short_name(dev)}", font=ctk.CTkFont(size=13, weight="bold"), width=300, anchor="w").pack(side="left")
+            ctk.CTkSwitch(row, text="Cheat mode", progress_color="#E22134", command=lambda idx=i: self._pool_toggle_cheat(idx)).pack(side="right")
+        self.pool_gpu_rows.pack(pady=8, fill="x")
+        self.pool_stop_btn.pack(pady=5)
+        self.pool_log.delete("1.0", "end")
+        self.pool_log.pack(pady=5)
+
+    def _pool_read_log(self, proc):
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line or "lambda" in line or "Warning" in line or line.startswith("=") or "Commands:" in line:
+                continue
+            self.after(0, lambda l=line: self._pool_append_log(l))
+
+    def _pool_append_log(self, line):
+        if hasattr(self, 'pool_log'):
+            self.pool_log.insert("end", time.strftime("%H:%M:%S  ") + line.strip() + "\n")
+            self.pool_log.see("end")
+
+    def _pool_toggle_cheat(self, idx):
+        if self.pool_proc and self.pool_proc.poll() is None:
+            try:
+                self.pool_proc.stdin.write(f"cheat {idx}\n")
+                self.pool_proc.stdin.flush()
+            except Exception:
+                pass
+
+    def _pool_kill(self, proc):
+        if proc and proc.poll() is None:
+            if os.name == 'nt':
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, creationflags=self._pool_creationflags())
+            else:
+                proc.terminate()
+
+    def stop_pool_sharing(self):
+        self._pool_kill(self.pool_proc)
+        self.pool_proc = None
+        for w in (self.pool_code_label, self.pool_gpu_rows, self.pool_stop_btn, self.pool_log):
+            w.pack_forget()
+        self.pool_code_input.pack(pady=5)
+        self.pool_start_btn.pack(pady=5)
+        self.pool_host_status.configure(text="Share this laptop's GPUs with the pool.", text_color="gray60")
+
+    # --- Play side ---
+    def launch_pool_game(self):
+        code = self.pool_play_code.get().strip()
+        if len(code) != 6 or not code.isdigit():
+            self.pool_play_status.configure(text="❌ Enter the 6-digit code shown on the sharing laptop.", text_color="#E22134")
+            return
+        if self.game_proc and self.game_proc.poll() is None:
+            self.pool_play_status.configure(text="The game is already running.", text_color="#f39c12")
+            return
+        args = [self._pool_python(), "-u", "pool_swarm.py", "--code", code, "--n", self.pool_n_choice.get(),
+                "--local", "auto" if self.pool_local_var.get() else "off"]
+        env = os.environ.copy()
+        env["PYTHONWARNINGS"] = "ignore"
+        self.game_proc = subprocess.Popen(args, cwd=self.POOL_DIR, env=env, creationflags=self._pool_creationflags())
+        self.pool_play_status.configure(text="✅ Game launched — the window opens in a few seconds.", text_color="#1DB954")
+
     def on_closing(self):
-        # Wrap everything in a try...finally block. 
+        for name in ('game_proc', 'pool_proc'):
+            try:
+                self._pool_kill(getattr(self, name, None))
+            except Exception:
+                pass
+        # Wrap everything in a try...finally block.
         # No matter WHAT crashes inside stop_hosting, self.destroy() WILL run.
         try:
             self.stop_hosting()
