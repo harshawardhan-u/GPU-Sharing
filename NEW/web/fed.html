@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07080d">
+<title>Train an AI together</title>
+<style>
+  :root { --bg: #07080d; --card: #12141e; --line: #23273a; --ink: #f2f1ee; --ink2: #9aa0b4; --me: #4F8EF7;
+          --good: #3CC488; --bad: #F0645A; --warn: #F2C744; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+               font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { min-height: 100vh; padding: max(14px, env(safe-area-inset-top)) 16px 28px; max-width: 520px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 2px; color: var(--ink2);
+           text-transform: uppercase; font-weight: 700; }
+  header i { width: 8px; height: 8px; border-radius: 50%; background: var(--ink2); }
+  header i.on { background: var(--good); box-shadow: 0 0 10px var(--good); }
+  h1 { font-size: 29px; line-height: 1.12; margin: 20px 0 10px; }
+  p { color: var(--ink2); font-size: 15.5px; line-height: 1.5; margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; margin: 12px 0; }
+  .gpu { display: flex; align-items: center; gap: 12px; }
+  .gpu .chip { width: 42px; height: 42px; border-radius: 12px; background: #1d2133; display: grid; place-items: center; font-size: 22px; flex: none; }
+  .gpu b { display: block; font-size: 15.5px; }
+  .gpu span { font-size: 13px; color: var(--ink2); }
+  input { width: 100%; font-size: 17px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line);
+          background: #0d0f17; color: var(--ink); outline: none; }
+  input:focus { border-color: var(--me); }
+  button { width: 100%; font-size: 18px; font-weight: 700; padding: 16px; border-radius: 16px; border: 0; margin-top: 12px;
+           background: linear-gradient(135deg, #4F8EF7, #7a5cf5); color: white; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  small { display: block; color: var(--ink2); font-size: 12.5px; text-align: center; margin-top: 12px; line-height: 1.5; }
+  .hide { display: none !important; }
+  .me { display: flex; align-items: center; gap: 10px; margin: 18px 0 6px; }
+  .me .dot { width: 18px; height: 18px; border-radius: 50%; background: var(--me); box-shadow: 0 0 14px var(--me); flex: none; }
+  .me b { font-size: 22px; }
+  .badge { margin-left: auto; font-size: 12px; font-weight: 700; padding: 5px 9px; border-radius: 999px; background: #3a1d1d; color: #ffb3ab; }
+  #statusline { font-size: 15.5px; color: var(--ink); min-height: 22px; margin: 6px 0; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; }
+  .stat span { display: block; font-size: 11.5px; color: var(--ink2); text-transform: uppercase; letter-spacing: .6px; }
+  .stat b { font-size: 24px; font-variant-numeric: tabular-nums; }
+  .data { display: flex; flex-wrap: wrap; gap: 3px; margin: 10px 0; }
+  .data canvas { width: 30px; height: 30px; border-radius: 5px; background: #000; image-rendering: pixelated; }
+  .priv { background: #10241b; border: 1px solid #1e4535; border-radius: 12px; padding: 11px 14px; color: #7fe3b4; font-size: 13.5px; line-height: 1.5; }
+  .bar { height: 10px; border-radius: 5px; background: #1d2133; overflow: hidden; margin-top: 10px; }
+  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #4F8EF7, #3CC488); transition: width .4s; }
+  .big { font-size: 46px; font-weight: 800; line-height: 1; margin: 6px 0; }
+  .center { text-align: center; }
+  .err { color: #ffb3ab; }
+  video { position: fixed; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; }
+</style>
+</head>
+<body>
+<header><i id="led"></i>Train an AI together</header>
+
+<section id="join">
+  <h1>Lend your GPU to teach an AI 🧠</h1>
+  <p>Your phone gets its own private set of handwritten digits. It trains a shared AI on them
+     using your phone's GPU, and sends back only what it learned — <b>your data never leaves your phone</b>.</p>
+  <div class="card gpu"><div class="chip">🧠</div><div><b id="gpuName">Checking your GPU…</b><span id="gpuMaker"></span></div></div>
+  <input id="name" maxlength="24" placeholder="Your name (optional)" autocomplete="off">
+  <button id="joinBtn" disabled>Join the training</button>
+  <small>Nothing is installed. Please keep this screen on while it trains.</small>
+</section>
+
+<section id="work" class="hide">
+  <div class="me"><span class="dot"></span><b id="myName">You</b><span id="poisonBadge" class="badge hide">😈 Poisoning (demo)</span></div>
+  <div class="priv" id="privLine">🔒 You hold <b id="nImg">0</b> private digit images. They stay on this phone.</div>
+  <div class="data" id="dataPrev"></div>
+  <div id="statusline">Connecting…</div>
+  <div class="stats">
+    <div class="stat"><span>Rounds</span><b id="sRounds">0</b></div>
+    <div class="stat"><span>Your accuracy</span><b id="sAcc">–</b></div>
+    <div class="stat"><span>GPU time</span><b id="sMs">–</b></div>
+  </div>
+  <div class="bar"><i id="prog"></i></div>
+  <p class="center" style="margin-top:14px" id="hint">Watch the big screen — the shared AI gets smarter each round.</p>
+</section>
+
+<section id="done" class="hide center">
+  <h1>Training finished 🎉</h1>
+  <div class="card"><div class="stat" style="border:0;padding:0"><span>Rounds you helped with</span></div><div class="big" id="dRounds">0</div>
+    <small>You trained on <b id="dImg">0</b> private images — none of them left your phone.</small></div>
+  <div class="card"><span style="color:var(--ink2);font-size:13px">The room's shared AI reached</span><div class="big" id="dAcc" style="color:var(--good)">–</div>
+    <small>accuracy on digits it had never seen</small></div>
+  <small>Stay on this page — the host may train again or run the recognise test.</small>
+</section>
+
+<section id="fail" class="hide">
+  <h1 class="err">This browser can't train</h1>
+  <p id="failMsg"></p>
+  <p>Try Chrome or Safari (updated), or another device.</p>
+</section>
+
+<video id="awake" src="/keepawake.mp4" muted playsinline loop></video>
+<script src="/vendor/tf.min.js"></script>
+<script src="/fed_model.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const qs = new URLSearchParams(location.search);
+let ws, me = null, LAYERS = null, model = null, xs = null, ys = null, N = 0, labels = null;
+let joined = false, poisoned = qs.get("poison") === "1", busy = false, totalRounds = 20;
+let gpuName = "GPU", gpuMk = "Other", backend = "";
+
+function show(id) { for (const s of ["join", "work", "done", "fail"]) $(s).classList.toggle("hide", s !== id); }
+function kindOf(mk) {
+  if (qs.get("kind")) return qs.get("kind");
+  if (mk === "CPU only") return "cpu";
+  const ua = navigator.userAgent;
+  if (/iPad|Tablet/.test(ua) || (/Android/.test(ua) && !/Mobile/.test(ua))) return "tablet";
+  if (/iPhone|Android|Mobi/.test(ua)) return "phone";
+  return "laptop";
+}
+function detectGPU() {
+  try {
+    const c = document.createElement("canvas").getContext("webgl2") || document.createElement("canvas").getContext("webgl");
+    const dbg = c && c.getExtension("WEBGL_debug_renderer_info");
+    const raw = dbg ? c.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : (c ? c.getParameter(c.RENDERER) : "");
+    const ven = dbg ? c.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : "";
+    const s = (raw + " " + ven).toLowerCase();
+    let mk = "Other";
+    for (const [k, v] of [["swiftshader", "CPU only"], ["llvmpipe", "CPU only"], ["adreno", "Qualcomm"], ["qualcomm", "Qualcomm"],
+      ["mali", "ARM"], ["apple", "Apple"], ["powervr", "Imagination"], ["xclipse", "Samsung"], ["nvidia", "NVIDIA"],
+      ["geforce", "NVIDIA"], ["radeon", "AMD"], ["amd", "AMD"], ["intel", "Intel"]]) if (s.includes(k)) { mk = v; break; }
+    let name = raw || "GPU";
+    const m = name.match(/^ANGLE \(([^,]*),\s*([^,(]*)/);
+    if (m) name = m[2];
+    name = name.replace(/\(0x[0-9a-fA-F]+\)/g, "").replace(/\(TM\)|\(R\)/g, "").replace(/Direct3D.*$/, "").replace(/\s+/g, " ").trim();
+    return [name || "GPU", mk];
+  } catch (e) { return ["GPU", "Other"]; }
+}
+
+async function init() {
+  [gpuName, gpuMk] = detectGPU();
+  $("gpuName").textContent = gpuName;
+  try {
+    await tf.ready();
+    backend = tf.getBackend();
+  } catch (e) { $("failMsg").textContent = String(e.message || e); show("fail"); return; }
+  $("gpuMaker").textContent = backend === "webgl" ? `Made by ${gpuMk} · training will run on your GPU`
+                                                  : `Backend: ${backend} (your GPU wasn't available, will use CPU)`;
+  try { $("name").value = qs.get("name") || localStorage.getItem("fedName") || ""; } catch (e) {}
+  $("joinBtn").disabled = false;
+  if (qs.get("auto") === "1") join();
+}
+
+async function keepAwake() {
+  try { await $("awake").play(); } catch (e) {}
+  try { if (navigator.wakeLock) await navigator.wakeLock.request("screen"); } catch (e) {}
+}
+
+function join() {
+  joined = true;
+  keepAwake();
+  try { localStorage.setItem("fedName", $("name").value.trim()); } catch (e) {}
+  show("work");
+  connect();
+}
+
+async function loadShard(idx) {
+  const buf = new Uint8Array(await (await fetch(`/shard/${idx}`, { cache: "no-store" })).arrayBuffer());
+  const n = new DataView(buf.buffer).getUint32(0, true);
+  const imgs = buf.subarray(4, 4 + n * 784);
+  labels = buf.subarray(4 + n * 784, 4 + n * 784 + n);
+  N = n;
+  const xf = new Float32Array(n * 784);
+  for (let i = 0; i < xf.length; i++) xf[i] = imgs[i] / 255;
+  tf.dispose([xs, ys]);
+  xs = tf.tensor2d(xf, [n, 784]);
+  ys = tf.oneHot(tf.tensor1d(labels, "int32"), 10);
+  $("nImg").textContent = n.toLocaleString();
+  drawPreview(imgs, n);
+}
+function drawPreview(imgs, n) {
+  const box = $("dataPrev"); box.innerHTML = "";
+  for (let k = 0; k < 10; k++) {
+    const c = document.createElement("canvas"); c.width = c.height = 28;
+    const g = c.getContext("2d"), im = g.createImageData(28, 28), off = ((k * 37) % n) * 784;
+    for (let i = 0; i < 784; i++) { const v = imgs[off + i]; im.data[i * 4] = im.data[i * 4 + 1] = im.data[i * 4 + 2] = v; im.data[i * 4 + 3] = 255; }
+    g.putImageData(im, 0, 0); box.appendChild(c);
+  }
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    $("led").classList.add("on");
+    ws.send(JSON.stringify({ role: "worker", name: $("name").value.trim(), gpu: gpuName, maker: gpuMk, kind: kindOf(gpuMk) }));
+  };
+  ws.onmessage = async (ev) => {
+    if (typeof ev.data !== "string") { await onTrain(ev.data); return; }
+    const m = JSON.parse(ev.data);
+    if (m.t === "welcome") {
+      me = m; LAYERS = m.layers;
+      document.documentElement.style.setProperty("--me", m.color);
+      $("myName").textContent = m.name;
+      $("poisonBadge").classList.toggle("hide", !poisoned);
+      status("Getting your private data…");
+      try {
+        model = buildModel(LAYERS);
+        await loadShard(m.shard);
+        status("Ready! Waiting for the host to start training…");
+      } catch (e) { $("failMsg").textContent = String(e.message || e); show("fail"); }
+    } else if (m.t === "poison") {
+      poisoned = m.on; $("poisonBadge").classList.toggle("hide", !poisoned);
+    } else if (m.t === "state") {
+      totalRounds = m.total_rounds || 20;
+    } else if (m.t === "finished") {
+      finishUp(m.state);
+    } else if (m.t === "reset") {
+      show("work"); $("sRounds").textContent = "0"; $("sAcc").textContent = "–"; $("prog").style.width = "0";
+      status("Ready! Waiting for the host to start training…");
+    }
+  };
+  ws.onclose = () => { $("led").classList.remove("on"); if (joined) { status("Connection lost — reconnecting…"); setTimeout(connect, 2000); } };
+}
+
+async function onTrain(data) {
+  if (busy || !model || !xs) return;
+  busy = true;
+  try {
+    const dv = new DataView(data), n = dv.getUint16(0, true);
+    const hdr = JSON.parse(new TextDecoder().decode(new Uint8Array(data, 2, n)));
+    const w = new Float32Array(data.slice(2 + n));   // slice → aligned buffer (offset 2+n isn't a multiple of 4)
+    setFlatWeights(model, w, LAYERS);
+    const t0 = performance.now();
+    let out, accTxt = "–";
+    if (poisoned) {
+      // Demo sabotage: ignore the data and send large random numbers instead of a real update.
+      out = new Float32Array(w.length);
+      for (let i = 0; i < out.length; i++) out[i] = w[i] + (Math.random() * 2 - 1) * 4;
+      await new Promise((r) => setTimeout(r, 250 + Math.random() * 200));
+      status("😈 Poisoning: sending junk instead of real training…");
+    } else {
+      model.compile({ optimizer: tf.train.sgd(hdr.lr), loss: "categoricalCrossentropy", metrics: ["accuracy"] });
+      const h = await model.fit(xs, ys, { epochs: hdr.epochs, batchSize: 32, shuffle: true });
+      out = await getFlatWeights(model);
+      const a = h.history.acc || h.history.accuracy;
+      if (a && a.length) accTxt = `${(a[a.length - 1] * 100).toFixed(0)}%`;
+    }
+    const ms = performance.now() - t0;
+    const head = new TextEncoder().encode(JSON.stringify({ t: "update", round: hdr.round, n: N, ms: Math.round(ms) }));
+    const buf = new Uint8Array(2 + head.length + out.byteLength);
+    new DataView(buf.buffer).setUint16(0, head.length, true);
+    buf.set(head, 2); buf.set(new Uint8Array(out.buffer), 2 + head.length);
+    if (ws.readyState === 1) ws.send(buf);
+    $("sRounds").textContent = hdr.round;
+    $("sAcc").textContent = accTxt;
+    $("sMs").textContent = `${(ms / 1000).toFixed(1)}s`;
+    $("prog").style.width = `${Math.min(100, 100 * hdr.round / totalRounds)}%`;
+    if (!poisoned) status(`Round ${hdr.round}: trained on your ${N.toLocaleString()} private images in ${(ms / 1000).toFixed(1)}s on your GPU`);
+  } catch (e) {
+    status("Error: " + (e.message || e));
+  } finally { busy = false; }
+}
+
+function finishUp(st) {
+  const mine = st && st.devices && st.devices.find((d) => me && d.id === me.id);
+  const best = st && st.history && st.history.length ? Math.max(...st.history.map((h) => h.acc)) : 0;
+  $("dRounds").textContent = mine ? mine.rounds : $("sRounds").textContent;
+  $("dImg").textContent = mine ? mine.samples.toLocaleString() : "0";
+  $("dAcc").textContent = `${(best * 100).toFixed(1)}%`;
+  show("done");
+}
+function status(t) { $("statusline").textContent = t; }
+$("joinBtn").onclick = join;
+init();
+</script>
+</body>
+</html>

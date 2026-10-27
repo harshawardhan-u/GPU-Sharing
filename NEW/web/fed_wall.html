@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Train an AI together — Wall</title>
+<style>
+  :root { --bg: #06070c; --panel: #0f1119; --panel2: #151826; --line: #22263a; --ink: #f3f2ef; --ink2: #9aa0b4;
+          --ink3: #6b7189; --accent: #6aa2ff; --good: #3CC488; --bad: #F0645A; --warn: #F2C744; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
+               font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  header { display: flex; align-items: center; gap: 18px; padding: 1.4vh 1.6vw; border-bottom: 1px solid var(--line); }
+  .logo { width: 4.6vh; height: 4.6vh; border-radius: 1.2vh; flex: none;
+          background: conic-gradient(from 210deg, #4F8EF7, #A57BF5, #E85FA0, #F58A3D, #F2C744, #3CC488, #36C2D6, #4F8EF7);
+          box-shadow: 0 0 2.2vh rgba(106, 162, 255, .35); }
+  h1 { margin: 0; font-size: 2.7vh; letter-spacing: .3vh; font-weight: 800; }
+  h1 span { background: linear-gradient(90deg, #6aa2ff, #c38bff, #ff8fb1); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header p { margin: .3vh 0 0; font-size: 1.6vh; color: var(--ink2); }
+  .ctl { margin-left: auto; display: flex; gap: .6vw; align-items: center; }
+  .ctl label { font-size: 1.4vh; color: var(--ink2); }
+  .ctl select, .ctl button { font: inherit; font-size: 1.55vh; padding: .9vh 1.1vw; border-radius: 1vh; border: 1px solid var(--line);
+                             background: var(--panel2); color: var(--ink); cursor: pointer; }
+  .ctl button.primary { background: linear-gradient(135deg, #4F8EF7, #7a5cf5); border: 0; font-weight: 700; padding: .9vh 1.6vw; }
+  .ctl button.on { border-color: var(--accent); color: var(--accent); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 29vw; min-height: 0; }
+  .stage { position: relative; padding: 1.8vh 1.6vw; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+  .accwrap { flex: 1; min-height: 0; position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 1.4vh; padding: 1.6vh 1.4vw; display: flex; flex-direction: column; }
+  .chartbox { flex: 1; min-height: 0; position: relative; }
+  .acchead { display: flex; align-items: baseline; gap: 1.2vw; margin-bottom: 1vh; }
+  .acchead .lbl { font-size: 1.7vh; color: var(--ink2); }
+  .acchead .now { font-size: 5.6vh; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .acchead .now small { font-size: 2vh; color: var(--ink2); font-weight: 600; }
+  .acchead .rd { margin-left: auto; font-size: 1.9vh; color: var(--ink2); }
+  .acchead .rd b { color: var(--ink); font-size: 2.4vh; }
+  #chart { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .overlay { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; padding: 4vh 4vw;
+             background: radial-gradient(ellipse at 50% 40%, rgba(16, 20, 40, .9), rgba(4, 5, 10, .96)); border-radius: 1.4vh; }
+  .overlay h2 { margin: 0 0 1vh; font-size: 3.4vh; }
+  .overlay .lead { font-size: 2vh; color: var(--ink2); margin: 0 0 3vh; max-width: 62vw; line-height: 1.5; }
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.2vw; }
+  .step { background: rgba(21, 24, 38, .9); border: 1px solid var(--line); border-radius: 1.4vh; padding: 2vh 1.1vw; }
+  .step .n { width: 4vh; height: 4vh; border-radius: 50%; display: grid; place-items: center; font-weight: 800;
+             background: #22284a; color: #c9d6ff; font-size: 1.9vh; margin-bottom: 1.2vh; }
+  .step b { display: block; font-size: 1.95vh; margin-bottom: .6vh; }
+  .step span { font-size: 1.6vh; color: var(--ink2); line-height: 1.4; }
+  .ribbon { margin-top: 2.6vh; font-size: 1.9vh; color: var(--ink); }
+  .ribbon b { color: #7fe3b4; }
+  .statrow { display: flex; gap: 1vw; margin-top: 1.4vh; }
+  .statbox { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 1.2vh; padding: 1vh 1vw; }
+  .statbox span { display: block; font-size: 1.4vh; color: var(--ink2); }
+  .statbox b { font-size: 2.6vh; font-variant-numeric: tabular-nums; }
+  .statbox.hi b { color: var(--good); }
+  /* draw pad */
+  .pad { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; gap: 3vw;
+         background: radial-gradient(ellipse at 50% 40%, rgba(16, 20, 40, .96), rgba(4, 5, 10, .99)); border-radius: 1.4vh; }
+  .pad.show { display: flex; }
+  .pad .left { text-align: center; }
+  .pad canvas#draw { width: 34vh; height: 34vh; background: #000; border-radius: 1.6vh; border: 2px solid #2c3352; touch-action: none; cursor: crosshair; }
+  .pad .hint2 { color: var(--ink2); font-size: 1.7vh; margin-top: 1.2vh; }
+  .pad .btns { margin-top: 1.4vh; display: flex; gap: .8vw; justify-content: center; }
+  .pad .btns button { font: inherit; font-size: 1.8vh; padding: 1.1vh 1.6vw; border-radius: 1vh; border: 1px solid var(--line); background: var(--panel2); color: var(--ink); cursor: pointer; }
+  .pad .btns button.go { background: linear-gradient(135deg, #4F8EF7, #7a5cf5); border: 0; font-weight: 700; }
+  .pad .right { text-align: center; min-width: 22vw; }
+  .pad .pred { font-size: 22vh; font-weight: 800; line-height: 1; color: #fff; }
+  .pad .plabel { font-size: 1.9vh; color: var(--ink2); }
+  .probs { display: flex; align-items: flex-end; gap: .5vw; height: 14vh; margin-top: 2vh; }
+  .probs .pb { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .probs .pb i { width: 100%; background: #35407a; border-radius: .4vh .4vh 0 0; transition: height .3s; }
+  .probs .pb.top i { background: var(--good); }
+  .probs .pb span { font-size: 1.4vh; color: var(--ink2); margin-top: .4vh; }
+  aside { border-left: 1px solid var(--line); padding: 1.6vh 1.2vw; display: flex; flex-direction: column; gap: 1.3vh; min-height: 0; }
+  .join { display: flex; gap: 1vw; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 1.4vh; padding: 1.2vh; }
+  .join img { width: 14vh; height: 14vh; border-radius: .8vh; background: #fff; flex: none; }
+  .join b { display: block; font-size: 2.3vh; }
+  .join .url { font-size: 1.7vh; color: var(--accent); font-weight: 700; word-break: break-all; margin: .5vh 0; }
+  .join small { font-size: 1.4vh; color: var(--ink2); }
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: .8vh .6vw; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 1.2vh; padding: 1vh .9vw; }
+  .kpi span { display: block; font-size: 1.35vh; color: var(--ink2); text-transform: uppercase; letter-spacing: .08vh; }
+  .kpi b { font-size: 3vh; font-variant-numeric: tabular-nums; }
+  .kpi.wide { grid-column: span 2; }
+  .makers { display: flex; flex-wrap: wrap; gap: .4vh; margin-top: .3vh; }
+  .makers i { font-style: normal; font-size: 1.2vh; padding: .2vh .5vw; border-radius: 99px; background: var(--panel2); color: var(--ink2); }
+  .devs { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: .5vh; }
+  .devs h3, .events h3 { margin: 0; font-size: 1.4vh; color: var(--ink3); text-transform: uppercase; letter-spacing: .12vh; }
+  .dev { position: relative; display: grid; grid-template-columns: .9vh 1fr auto; gap: .3vh .6vw; align-items: center;
+         background: var(--panel); border: 1px solid var(--line); border-radius: .9vh; padding: .6vh .7vw; }
+  .dev .sw { width: .9vh; height: 100%; border-radius: .5vh; grid-row: span 2; }
+  .dev .nm { font-size: 1.6vh; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dev .gp { font-size: 1.2vh; color: var(--ink2); font-weight: 400; margin-left: .4vw; }
+  .dev .ct { font-size: 1.7vh; font-weight: 800; text-align: right; font-variant-numeric: tabular-nums; }
+  .dev .sub { grid-column: 2 / 4; font-size: 1.25vh; color: var(--ink3); }
+  .chip { font-size: 1.15vh; font-weight: 700; padding: .12vh .5vw; border-radius: 99px; margin-left: .4vw; vertical-align: middle; }
+  .chip.training { background: #143a3a; color: #7fe3e3; } .chip.ready { background: #1b2033; color: #aab3d1; }
+  .chip.done { background: #143326; color: #7fe3b4; } .chip.rejected, .chip.poisoned { background: #3d1717; color: #ff9c92; }
+  .chip.left { background: #222; color: #888; }
+  .dev.rejected, .dev.poisoned { border-color: #6b2323; } .dev.left { opacity: .5; }
+  .dev .acts { position: absolute; right: .6vw; top: .5vh; display: none; gap: .3vw; }
+  .dev:hover .acts { display: flex; }
+  .dev .acts button { font-size: 1.25vh; padding: .3vh .4vw; border-radius: .6vh; border: 1px solid var(--line); background: var(--panel2); color: var(--ink); cursor: pointer; }
+  .events { height: 15vh; flex: none; overflow: hidden; display: flex; flex-direction: column; gap: .35vh; }
+  .ev { font-size: 1.4vh; color: var(--ink2); line-height: 1.35; }
+  .ev.k-caught { color: #ff9c92; font-weight: 700; } .ev.k-round { color: #9fd0ff; } .ev.k-done { color: #7fe3b4; font-weight: 700; }
+  .ev.k-warn { color: #f5b97a; } .ev.k-join { color: #8fe3b4; } .ev.k-start { color: #c9b6ff; }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"></div>
+  <div>
+    <h1>TRAIN AN AI <span>TOGETHER</span></h1>
+    <p>Every phone trains a shared AI on its own private data. The data never leaves the phone — only the learning comes back.</p>
+  </div>
+  <div class="ctl">
+    <label>Rounds <select id="rounds"><option>10</option><option selected>20</option><option>30</option></select></label>
+    <button id="startBtn" class="primary">▶ Start training</button>
+    <button id="recogBtn">✏️ Recognise test</button>
+    <button id="resetBtn">Reset</button>
+  </div>
+</header>
+<main>
+  <section class="stage">
+    <div class="accwrap">
+      <div class="acchead">
+        <span class="lbl">Shared AI accuracy on digits it has never seen</span>
+        <span class="now" id="accNow">—</span>
+        <span class="rd" id="roundTxt"></span>
+      </div>
+      <div class="chartbox"><canvas id="chart"></canvas></div>
+      <div class="overlay" id="intro">
+        <h2>How it works</h2>
+        <p class="lead">No phone has enough data to train a good AI alone. Together, the room does — without anyone sharing their data.</p>
+        <div class="steps">
+          <div class="step"><div class="n">1</div><b>Scan &amp; get private data</b><span>Each phone receives its own set of handwritten digits that stays on the phone.</span></div>
+          <div class="step"><div class="n">2</div><b>Train on your GPU</b><span>Each phone trains the shared AI a little on its own data, then sends back only the learning.</span></div>
+          <div class="step"><div class="n">3</div><b>Every update is checked</b><span>This laptop tests each phone's update and throws out poisoned ones.</span></div>
+          <div class="step"><div class="n">4</div><b>The AI gets smarter</b><span>Good updates are averaged into one shared AI. Repeat — accuracy climbs each round.</span></div>
+        </div>
+        <div class="ribbon" id="introRibbon">Waiting for phones to join…</div>
+        <div class="statrow">
+          <div class="statbox"><span>Devices ready</span><b id="iDev">0</b></div>
+          <div class="statbox"><span>Private images in the room</span><b id="iImg">0</b></div>
+          <div class="statbox"><span>None of it leaves a phone</span><b style="color:var(--good)">🔒 Private</b></div>
+        </div>
+      </div>
+      <div class="pad" id="pad">
+        <div class="left">
+          <canvas id="draw" width="280" height="280"></canvas>
+          <div class="hint2">Draw a digit 0–9 with your mouse</div>
+          <div class="btns"><button id="clearBtn">Clear</button><button id="goBtn" class="go">Recognise</button><button id="closePad">Close</button></div>
+        </div>
+        <div class="right">
+          <div class="plabel">The room's AI thinks it's</div>
+          <div class="pred" id="pred">?</div>
+          <div class="probs" id="probs"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <aside>
+    <div class="join">
+      <img src="/qr.png" alt="QR code">
+      <div><b>Scan to join</b><div class="url" id="url"></div><small>Same Wi-Fi · opens in the browser · no app</small></div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><span>Devices</span><b id="kDev">0</b></div>
+      <div class="kpi"><span>GPU makers</span><b id="kMak">0</b><div class="makers" id="kMakers"></div></div>
+      <div class="kpi"><span>Round</span><b id="kRound">0</b></div>
+      <div class="kpi"><span>Accuracy</span><b id="kAcc" style="color:var(--good)">—</b></div>
+      <div class="kpi wide"><span>Private images learned from this round</span><b id="kImg">0</b></div>
+    </div>
+    <div class="devs" id="devs"><h3>Devices in the room</h3></div>
+    <div class="events" id="events"><h3>What's happening</h3></div>
+  </aside>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let ws, S = null, canControl = true, trained = false;
+const chart = $("chart"), cx = chart.getContext("2d");
+
+function fmt(n) { return (n || 0).toLocaleString(); }
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+function act(t, id, on) { send({ t, id, on }); }
+
+function sizeChart() { drawChart(); }
+addEventListener("resize", sizeChart);
+
+function drawChart() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const W = Math.max(10, Math.round(chart.clientWidth * dpr)), H = Math.max(10, Math.round(chart.clientHeight * dpr));
+  if (chart.width !== W || chart.height !== H) { chart.width = W; chart.height = H; }   // keep backing store matched to layout
+  const w = chart.width, h = chart.height;
+  cx.clearRect(0, 0, w, h);
+  const padL = 46 * dpr, padB = 26 * dpr, padT = 8 * dpr, padR = 10 * dpr;
+  const x0 = padL, x1 = w - padR, y0 = h - padB, y1 = padT;
+  const hist = (S && S.history) || [];
+  const total = (S && S.total_rounds) || 20;
+  // gridlines + y labels (0..100%)
+  cx.strokeStyle = "#1b2030"; cx.fillStyle = "#6b7189"; cx.lineWidth = 1 * dpr;
+  cx.font = `${12 * dpr}px system-ui`; cx.textAlign = "right"; cx.textBaseline = "middle";
+  for (let p = 0; p <= 100; p += 25) {
+    const y = y0 + (y1 - y0) * (p / 100);
+    cx.beginPath(); cx.moveTo(x0, y); cx.lineTo(x1, y); cx.stroke();
+    cx.fillText(p + "%", x0 - 6 * dpr, y);
+  }
+  // x labels (rounds)
+  cx.textAlign = "center"; cx.textBaseline = "top";
+  const step = total > 20 ? 5 : total > 10 ? 2 : 1;
+  for (let r = 0; r <= total; r += step) {
+    const x = x0 + (x1 - x0) * (total ? r / total : 0);
+    if (r > 0) cx.fillText(r, x, y0 + 6 * dpr);
+  }
+  cx.textAlign = "left"; cx.fillText("round", x0, y0 + 6 * dpr);
+  if (!hist.length) return;
+  const X = (r) => x0 + (x1 - x0) * (total ? r / total : 0);
+  const Y = (a) => y0 + (y1 - y0) * a;
+  // area + line
+  cx.beginPath(); cx.moveTo(X(hist[0].round), Y(hist[0].acc));
+  for (const p of hist) cx.lineTo(X(p.round), Y(p.acc));
+  const grad = cx.createLinearGradient(0, y1, 0, y0);
+  grad.addColorStop(0, "rgba(60,196,136,.28)"); grad.addColorStop(1, "rgba(60,196,136,0)");
+  cx.lineTo(X(hist[hist.length - 1].round), y0); cx.lineTo(X(hist[0].round), y0); cx.closePath();
+  cx.fillStyle = grad; cx.fill();
+  cx.beginPath(); cx.moveTo(X(hist[0].round), Y(hist[0].acc));
+  for (const p of hist) cx.lineTo(X(p.round), Y(p.acc));
+  cx.strokeStyle = "#3CC488"; cx.lineWidth = 3 * dpr; cx.lineJoin = "round"; cx.stroke();
+  for (const p of hist) {
+    cx.beginPath(); cx.arc(X(p.round), Y(p.acc), 4 * dpr, 0, 7); cx.fillStyle = "#3CC488"; cx.fill();
+    if (p.rejected) {
+      cx.fillStyle = "#F0645A"; cx.font = `${13 * dpr}px system-ui`; cx.textAlign = "center"; cx.textBaseline = "bottom";
+      cx.fillText("🛡", X(p.round), Y(p.acc) - 7 * dpr);
+    }
+  }
+  const last = hist[hist.length - 1];
+  cx.fillStyle = "#eafff5"; cx.font = `bold ${15 * dpr}px system-ui`; cx.textAlign = "center"; cx.textBaseline = "bottom";
+  cx.fillText(`${(last.acc * 100).toFixed(1)}%`, X(last.round), Y(last.acc) - 9 * dpr);
+}
+
+const CHIP = { ready: "ready", training: "training", done: "done ✓", rejected: "REJECTED", poisoned: "POISONED", left: "left" };
+function render() {
+  if (!S) return;
+  $("url").textContent = S.url;
+  $("kDev").textContent = S.active;
+  $("kMak").textContent = S.makers.length;
+  $("kMakers").innerHTML = S.makers.map((m) => `<i>${esc(m)}</i>`).join("");
+  $("kRound").textContent = S.phase === "idle" ? "—" : `${S.round}/${S.total_rounds}`;
+  const acc = S.accuracy != null ? `${(S.accuracy * 100).toFixed(1)}%` : "—";
+  $("kAcc").textContent = acc;
+  $("accNow").innerHTML = S.accuracy != null ? `${(S.accuracy * 100).toFixed(1)}<small>%</small>` : "—";
+  $("roundTxt").innerHTML = S.phase === "idle" ? "" : `round <b>${S.round}</b> / ${S.total_rounds}`;
+  const lastImg = S.history && S.history.length ? S.history[S.history.length - 1].images : 0;
+  $("kImg").textContent = fmt(lastImg);
+  trained = !!(S.history && S.history.length);
+  // intro vs chart
+  const showIntro = S.phase === "idle" && !trained;
+  $("intro").classList.toggle("hide", !showIntro);
+  const roomImgs = S.active * (S.shard_size || 2000);
+  $("iDev").textContent = S.active;
+  $("iImg").textContent = fmt(roomImgs);
+  $("introRibbon").innerHTML = S.active
+    ? `<b>${S.active}</b> device(s) ready · <b>${fmt(roomImgs)}</b> private images in the room · press <b>Start training</b>`
+    : "Waiting for phones to join…";
+  // devices
+  const devs = [...S.devices].sort((a, b) => (b.samples - a.samples) || (a.id - b.id));
+  const room = Math.max(3, Math.floor(($("devs").clientHeight - 18) / (innerHeight * 0.062)));
+  $("devs").innerHTML = "<h3>Devices in the room</h3>" + devs.slice(0, room).map((d) => `
+    <div class="dev ${d.status}">
+      <div class="sw" style="background:${d.color}"></div>
+      <div class="nm">${esc(d.name)}<span class="chip ${d.status}">${CHIP[d.status] || d.status}</span>${d.poison ? '<span class="chip poisoned">😈</span>' : ""}<span class="gp">${esc(d.gpu)}</span></div>
+      <div class="ct">${d.rounds}</div>
+      <div class="sub">${fmt(d.samples)} imgs trained${d.acc != null ? ` · last update scored ${(d.acc * 100).toFixed(0)}%` : ""}${d.rejected ? ` · ${d.rejected} rejected` : ""}</div>
+      ${canControl ? `<div class="acts"><button onclick="act('poison',${d.id},${!d.poison})">${d.poison ? "Stop" : "😈 Poison"}</button><button onclick="act('kick',${d.id})">✕</button></div>` : ""}
+    </div>`).join("") + (devs.length > room ? `<div class="ev">+ ${devs.length - room} more</div>` : "");
+  // events
+  const icon = { join: "🟢", round: "📈", caught: "🛡️", warn: "⚠️", done: "✅", start: "▶️", info: "•" };
+  $("events").innerHTML = "<h3>What's happening</h3>" + S.events.slice(0, 5).map((e) =>
+    `<div class="ev k-${e.kind}">${icon[e.kind] || "•"} ${esc(e.text)}</div>`).join("");
+  $("startBtn").textContent = S.phase === "training" ? "■ Training…" : (trained ? "▶ Train again" : "▶ Start training");
+  $("startBtn").disabled = S.phase === "training";
+  drawChart();
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => ws.send(JSON.stringify({ role: "wall" }));
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.t === "hello") { canControl = m.control; document.querySelector(".ctl").style.visibility = canControl ? "" : "hidden"; }
+    else if (m.t === "state") { S = m; render(); }
+    else if (m.t === "finished") { S = m.state; render(); }
+    else if (m.t === "reset") { S && (S.history = []); drawChart(); }
+    else if (m.t === "prediction") { showPrediction(m); }
+  };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+
+$("startBtn").onclick = () => send({ t: "start", rounds: +$("rounds").value, epochs: 1 });
+$("resetBtn").onclick = () => send({ t: "reset" });
+$("rounds").onchange = () => { if (S && S.phase !== "training") { /* applied on next start */ } };
+
+// ---- draw pad ----
+const draw = $("draw"), dctx = draw.getContext("2d");
+let drawing = false;
+function clearPad() { dctx.fillStyle = "#000"; dctx.fillRect(0, 0, 280, 280); }
+clearPad();
+function dpos(e) { const r = draw.getBoundingClientRect(), t = e.touches ? e.touches[0] : e; return [(t.clientX - r.left) / r.width * 280, (t.clientY - r.top) / r.height * 280]; }
+function dstart(e) { e.preventDefault(); drawing = true; const [x, y] = dpos(e); dctx.beginPath(); dctx.moveTo(x, y); }
+function dmove(e) { if (!drawing) return; e.preventDefault(); const [x, y] = dpos(e); dctx.strokeStyle = "#fff"; dctx.lineWidth = 22; dctx.lineCap = "round"; dctx.lineJoin = "round"; dctx.lineTo(x, y); dctx.stroke(); }
+function dend() { drawing = false; }
+draw.addEventListener("mousedown", dstart); draw.addEventListener("mousemove", dmove); addEventListener("mouseup", dend);
+draw.addEventListener("touchstart", dstart, { passive: false }); draw.addEventListener("touchmove", dmove, { passive: false }); draw.addEventListener("touchend", dend);
+function recognise() {
+  const c = document.createElement("canvas"); c.width = c.height = 28;
+  c.getContext("2d").drawImage(draw, 0, 0, 28, 28);
+  const d = c.getContext("2d").getImageData(0, 0, 28, 28).data;
+  const px = new Array(784);
+  for (let i = 0; i < 784; i++) px[i] = d[i * 4] / 255;
+  send({ t: "predict", pixels: px });
+}
+function showPrediction(m) {
+  if (!m.trained) { $("pred").textContent = "?"; $("probs").innerHTML = '<div style="color:#f5b97a;font-size:1.7vh;width:100%">Train the AI first (press Start training)</div>'; return; }
+  $("pred").textContent = m.digit;
+  const mx = Math.max(...m.probs);
+  $("probs").innerHTML = m.probs.map((p, i) => `<div class="pb ${p === mx ? "top" : ""}"><i style="height:${(p * 100).toFixed(0)}%"></i><span>${i}</span></div>`).join("");
+}
+$("recogBtn").onclick = () => { $("pad").classList.add("show"); clearPad(); $("pred").textContent = "?"; $("probs").innerHTML = ""; };
+$("closePad").onclick = () => $("pad").classList.remove("show");
+$("clearBtn").onclick = () => { clearPad(); $("pred").textContent = "?"; $("probs").innerHTML = ""; };
+$("goBtn").onclick = recognise;
+addEventListener("keydown", (e) => { if (e.key === "Escape") $("pad").classList.remove("show"); if ((e.key === "s" || e.key === "S") && e.target.tagName !== "SELECT") $("startBtn").click(); });
+
+sizeChart();
+connect();
+</script>
+</body>
+</html>

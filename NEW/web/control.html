@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nexus Mission Control</title>
+<style>
+  :root { --bg: #08090f; --panel: #12141e; --line: #23273a; --ink: #f0efec; --ink2: #9aa0b4; --ink3: #5d6377;
+          --accent: #eb6834; --good: #1baf7a; --bad: #e34948; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+               font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  header { display: flex; align-items: center; gap: 18px; padding: 14px 22px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: 2px; font-weight: 800; }
+  header h1 span { color: var(--accent); }
+  .live { display: inline-flex; align-items: center; gap: 6px; color: var(--good); font-size: 13px; font-weight: 600; }
+  .live i { width: 9px; height: 9px; border-radius: 50%; background: var(--good); box-shadow: 0 0 10px var(--good);
+            animation: pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  .tiles { margin-left: auto; display: flex; gap: 10px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 14px; min-width: 110px; }
+  .tile small { color: var(--ink2); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  .tile b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  main { display: grid; grid-template-columns: 1fr 460px; min-height: 0; }
+  #mapwrap { position: relative; min-height: 0; }
+  #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #gpuLabel { position: absolute; left: 22px; bottom: 16px; color: var(--ink2); font-size: 13px; }
+  aside { border-left: 1px solid var(--line); overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .card h2 { margin: 0 0 10px; font-size: 13px; color: var(--ink2); text-transform: uppercase; letter-spacing: 1.5px; }
+  .join { display: flex; gap: 14px; align-items: center; }
+  .join img { width: 132px; height: 132px; border-radius: 8px; background: #fff; }
+  .join .url { font-size: 18px; font-weight: 700; word-break: break-all; }
+  .join p { margin: 6px 0 0; color: var(--ink2); font-size: 13px; }
+  .player { border-top: 1px solid var(--line); padding: 10px 0; }
+  .player:first-of-type { border-top: 0; padding-top: 0; }
+  .ptop { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  .pname { font-weight: 700; }
+  .pdev { color: var(--ink2); font-size: 12px; }
+  .kick { margin-left: auto; background: transparent; color: var(--ink2); border: 1px solid var(--line);
+          border-radius: 7px; padding: 3px 9px; cursor: pointer; font-size: 12px; }
+  .kick:hover { color: var(--bad); border-color: var(--bad); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 8px 0; }
+  .stats div { font-size: 11px; color: var(--ink2); }
+  .stats b { display: block; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .slider { display: grid; grid-template-columns: 110px 1fr 74px; align-items: center; gap: 8px; font-size: 12px; color: var(--ink2); margin-top: 4px; }
+  .slider output { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .empty { color: var(--ink3); font-size: 13px; }
+  ol { margin: 0; padding-left: 20px; }
+  ol li { padding: 3px 0; font-variant-numeric: tabular-nums; }
+  ol li span { color: var(--ink2); float: right; }
+  #events div { font-size: 12px; color: var(--ink2); padding: 2px 0; }
+  #events div b { color: var(--ink3); font-weight: 500; margin-right: 6px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NEXUS <span>ARENA</span> · MISSION CONTROL</h1>
+  <div class="live"><i></i>LIVE</div>
+  <div class="tiles">
+    <div class="tile"><small>Players</small><b id="tPlayers">0</b></div>
+    <div class="tile"><small>Entities on GPU</small><b id="tEntities">0</b></div>
+    <div class="tile"><small>GPU busy</small><b id="tBusy">0%</b></div>
+    <div class="tile"><small>Uptime</small><b id="tUp">0:00</b></div>
+  </div>
+</header>
+<main>
+  <div id="mapwrap"><canvas id="map"></canvas><div id="gpuLabel"></div></div>
+  <aside>
+    <div class="card"><h2>Join from your phone</h2>
+      <div class="join"><img src="/qr.png" alt="QR code to join"><div><div class="url" id="url"></div>
+        <p>Same Wi-Fi as this laptop. No app needed.</p></div></div></div>
+    <div class="card"><h2>Players · live GPU slicing</h2><div id="players"><div class="empty">Waiting for players…</div></div></div>
+    <div class="card"><h2>Leaderboard · longest survival</h2><ol id="board"></ol></div>
+    <div class="card"><h2>Events</h2><div id="events"></div></div>
+  </aside>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const canvas = $("map"), ctx = canvas.getContext("2d");
+let state = { players: [], gpu: "", gpu_busy_pct: 0 }, ws;
+const cards = new Map(), packets = [], shown = new Map();
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => ws.send(JSON.stringify({ role: "control" }));
+  ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.type === "telemetry") update(m); };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+connect();
+
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+function update(m) {
+  state = m;
+  $("tPlayers").textContent = m.players.length;
+  $("tEntities").textContent = m.entities.toLocaleString();
+  $("tBusy").textContent = m.gpu_busy_pct.toFixed(1) + "%";
+  $("tUp").textContent = fmtTime(m.uptime);
+  $("url").textContent = m.url;
+  $("gpuLabel").textContent = "Physics GPU: " + m.gpu;
+  const list = $("players");
+  if (!m.players.length) { list.innerHTML = '<div class="empty">Waiting for players…</div>'; cards.clear(); }
+  else if (list.querySelector(".empty")) list.innerHTML = "";
+  const ids = new Set(m.players.map((p) => p.id));
+  for (const [id, el] of cards) if (!ids.has(id)) { el.remove(); cards.delete(id); }
+  for (const p of m.players) {
+    let el = cards.get(p.id);
+    if (!el) { el = makeCard(p); cards.set(p.id, el); list.appendChild(el); }
+    el.querySelector(".ups").textContent = p.ups + "/s";
+    el.querySelector(".gms").textContent = p.gpu_ms.toFixed(1) + " ms";
+    el.querySelector(".mem").textContent = p.mem_kb.toFixed(0) + " KB";
+    el.querySelector(".rtt").textContent = p.rtt ? p.rtt.toFixed(0) + " ms" : "-";
+    const sh = el.querySelector(".share"), bu = el.querySelector(".budget");
+    if (document.activeElement !== sh) { sh.value = Math.round(p.share * 100); el.querySelector(".shareOut").textContent = sh.value + "%"; }
+    if (document.activeElement !== bu) { bu.value = p.budget; el.querySelector(".budgetOut").textContent = p.budget; }
+  }
+  const board = [...m.players].sort((a, b) => b.best - a.best).slice(0, 6);
+  $("board").innerHTML = board.map((p) => `<li><b style="color:${p.color}">●</b> ${esc(p.name)}<span>${p.best.toFixed(1)} s</span></li>`).join("");
+  $("events").innerHTML = m.events.map((e) => `<div><b>${e.t}</b>${esc(e.text)}</div>`).join("");
+}
+
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function makeCard(p) {
+  const el = document.createElement("div");
+  el.className = "player";
+  el.innerHTML = `
+    <div class="ptop"><span class="dot" style="background:${p.color}"></span><span class="pname">${esc(p.name)}</span>
+      <span class="pdev">${esc(p.device)}</span><button class="kick">Remove</button></div>
+    <div class="stats"><div>Updates<b class="ups">-</b></div><div>GPU time<b class="gms">-</b></div>
+      <div>GPU memory<b class="mem">-</b></div><div>Ping<b class="rtt">-</b></div></div>
+    <label class="slider">GPU share<input class="share" type="range" min="2" max="100" step="1"><output class="shareOut"></output></label>
+    <label class="slider">Swarm budget<input class="budget" type="range" min="50" max="${state.max_enemies || 3000}" step="50"><output class="budgetOut"></output></label>`;
+  const sh = el.querySelector(".share"), bu = el.querySelector(".budget");
+  sh.oninput = () => el.querySelector(".shareOut").textContent = sh.value + "%";
+  sh.onchange = () => { send({ t: "set", id: p.id, share: sh.value / 100 }); sh.blur(); };
+  bu.oninput = () => el.querySelector(".budgetOut").textContent = bu.value;
+  bu.onchange = () => { send({ t: "set", id: p.id, budget: +bu.value }); bu.blur(); };
+  el.querySelector(".kick").onclick = () => send({ t: "kick", id: p.id });
+  return el;
+}
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2), r = canvas.getBoundingClientRect();
+  canvas.width = r.width * dpr; canvas.height = r.height * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener("resize", resize); resize();
+
+let last = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const W = canvas.clientWidth, H = canvas.clientHeight, cx = W / 2, cy = H / 2;
+  ctx.clearRect(0, 0, W, H);
+  const R = Math.min(W, H) * 0.36, players = state.players || [];
+  const nodes = players.map((p, i) => {
+    const a = -Math.PI / 2 + (i / Math.max(players.length, 1)) * Math.PI * 2;
+    return { p, x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R };
+  });
+  ctx.strokeStyle = "#1a1e2d"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+  for (const n of nodes) {
+    ctx.strokeStyle = n.p.color + "55"; ctx.lineWidth = 2 + 6 * n.p.share;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(n.x, n.y); ctx.stroke();
+    const rate = n.p.ups / 6;
+    if (Math.random() < rate * dt) packets.push({ id: n.p.id, t: 0, out: true, color: n.p.color });
+    if (Math.random() < 2 * dt) packets.push({ id: n.p.id, t: 0, out: false, color: "#f0efec" });
+  }
+  for (let i = packets.length - 1; i >= 0; i--) {
+    const k = packets[i], n = nodes.find((m) => m.p.id === k.id);
+    k.t += dt * 1.6;
+    if (!n || k.t >= 1) { packets.splice(i, 1); continue; }
+    const t = k.out ? k.t : 1 - k.t;
+    const x = cx + (n.x - cx) * t, y = cy + (n.y - cy) * t;
+    ctx.fillStyle = k.color; ctx.shadowColor = k.color; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.arc(x, y, k.out ? 4 : 2.5, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+  }
+  const busy = Math.min(100, state.gpu_busy_pct || 0);
+  const shownBusy = (shown.get("busy") || 0) + (busy - (shown.get("busy") || 0)) * Math.min(1, dt * 4);
+  shown.set("busy", shownBusy);
+  ctx.fillStyle = "#12141e"; ctx.strokeStyle = "#2a2f45"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx, cy, 92, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = "#eb6834"; ctx.lineWidth = 8; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.arc(cx, cy, 92, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0.01, shownBusy / 100)); ctx.stroke();
+  ctx.lineCap = "butt";
+  ctx.fillStyle = "#f0efec"; ctx.textAlign = "center"; ctx.font = "700 13px system-ui";
+  ctx.fillText((state.gpu || "GPU").slice(0, 22), cx, cy - 8);
+  ctx.font = "700 24px system-ui"; ctx.fillText(shownBusy.toFixed(1) + "%", cx, cy + 20);
+  ctx.font = "11px system-ui"; ctx.fillStyle = "#9aa0b4"; ctx.fillText("GPU BUSY", cx, cy + 38);
+  for (const n of nodes) {
+    ctx.fillStyle = "#12141e"; ctx.strokeStyle = n.p.color; ctx.lineWidth = 3;
+    ctx.shadowColor = n.p.color; ctx.shadowBlur = n.p.invincible ? 30 : 14;
+    ctx.beginPath(); ctx.arc(n.x, n.y, 34, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.fillStyle = "#f0efec"; ctx.font = "700 14px system-ui"; ctx.textAlign = "center";
+    ctx.fillText(n.p.name.slice(0, 10), n.x, n.y - 2);
+    ctx.fillStyle = "#9aa0b4"; ctx.font = "11px system-ui"; ctx.fillText(n.p.device, n.x, n.y + 14);
+    const below = n.y > cy ? 54 : -50;
+    const l1 = `${n.p.ups} upd/s · ${n.p.gpu_ms.toFixed(1)} ms GPU · ${n.p.rtt ? n.p.rtt.toFixed(0) + " ms" : "–"}`;
+    const l2 = `share ${Math.round(n.p.share * 100)}% · ${n.p.end - n.p.start} entities`;
+    ctx.font = "12px system-ui";
+    const bw = Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 16;
+    ctx.fillStyle = "rgba(8, 9, 15, 0.88)";
+    ctx.fillRect(n.x - bw / 2, n.y + below - 14, bw, 36);
+    ctx.fillStyle = "#f0efec"; ctx.fillText(l1, n.x, n.y + below);
+    ctx.fillStyle = "#9aa0b4"; ctx.fillText(l2, n.x, n.y + below + 16);
+  }
+  if (!players.length) {
+    ctx.fillStyle = "#5d6377"; ctx.font = "15px system-ui"; ctx.textAlign = "center";
+    ctx.fillText("Scan the QR code to join — devices will appear here", cx, cy + 130);
+  }
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

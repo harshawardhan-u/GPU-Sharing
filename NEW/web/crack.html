@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07080d">
+<title>Password Strength Lab</title>
+<style>
+  :root { --bg: #07080d; --card: #12141e; --line: #23273a; --ink: #f2f1ee; --ink2: #9aa0b4; --me: #F2C744; --good: #3CC488; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { min-height: 100vh; padding: max(14px, env(safe-area-inset-top)) 16px 28px; max-width: 520px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 2px; color: var(--ink2); text-transform: uppercase; font-weight: 700; }
+  header i { width: 8px; height: 8px; border-radius: 50%; background: var(--ink2); }
+  header i.on { background: var(--good); box-shadow: 0 0 10px var(--good); }
+  h1 { font-size: 29px; line-height: 1.12; margin: 20px 0 10px; }
+  p { color: var(--ink2); font-size: 15.5px; line-height: 1.5; margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; margin: 12px 0; }
+  .gpu { display: flex; align-items: center; gap: 12px; }
+  .gpu .chip { width: 42px; height: 42px; border-radius: 12px; background: #1d2133; display: grid; place-items: center; font-size: 22px; flex: none; }
+  .gpu b { display: block; font-size: 15.5px; } .gpu span { font-size: 13px; color: var(--ink2); }
+  input { width: 100%; font-size: 17px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line); background: #0d0f17; color: var(--ink); outline: none; }
+  button { width: 100%; font-size: 18px; font-weight: 700; padding: 16px; border-radius: 16px; border: 0; margin-top: 12px; background: linear-gradient(135deg, #F2C744, #F58A3D); color: #1a1407; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  small { display: block; color: var(--ink2); font-size: 12.5px; text-align: center; margin-top: 12px; line-height: 1.5; }
+  .hide { display: none !important; }
+  .me { display: flex; align-items: center; gap: 10px; margin: 18px 0 10px; }
+  .me .dot { width: 18px; height: 18px; border-radius: 50%; background: var(--me); box-shadow: 0 0 14px var(--me); flex: none; }
+  .me b { font-size: 22px; }
+  #statusline { font-size: 15.5px; color: var(--ink); min-height: 22px; margin: 6px 0; }
+  .big { font-size: 40px; font-weight: 800; line-height: 1; margin: 4px 0; font-variant-numeric: tabular-nums; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 10px 0; }
+  .stat span { display: block; font-size: 12px; color: var(--ink2); text-transform: uppercase; letter-spacing: .6px; }
+  .center { text-align: center; }
+  video { position: fixed; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; }
+</style>
+</head>
+<body>
+<header><i id="led"></i>Password Strength Lab</header>
+
+<section id="join">
+  <h1>Lend your GPU to test passwords 🔐</h1>
+  <p>Your phone's GPU will help guess a <b>random demo password</b> the host made up — millions of guesses a second.
+     It shows why short passwords are weak and long ones are safe. No real passwords are involved.</p>
+  <div class="card gpu"><div class="chip">🔐</div><div><b id="gpuName">Checking your GPU…</b><span id="gpuMaker"></span></div></div>
+  <input id="name" maxlength="24" placeholder="Your name (optional)" autocomplete="off">
+  <button id="joinBtn" disabled>Join</button>
+  <small>Nothing is installed. Please keep this screen on while it works.</small>
+</section>
+
+<section id="work" class="hide">
+  <div class="me"><span class="dot"></span><b id="myName">You</b></div>
+  <div id="statusline">Connecting…</div>
+  <div class="stat"><span>Your guess speed</span><div class="big" id="sRate" style="color:var(--me)">—</div></div>
+  <div class="stat"><span>Guesses you've tried</span><div class="big" id="sGuess">0</div></div>
+  <p class="center" id="hint" style="margin-top:14px">Watch the big screen — the room is guessing together.</p>
+</section>
+
+<section id="fail" class="hide">
+  <h1 style="color:#ffb3ab">This browser can't help</h1>
+  <p id="failMsg"></p><p>Try Chrome or Safari (updated), or another device.</p>
+</section>
+
+<video id="awake" src="/keepawake.mp4" muted playsinline loop></video>
+<script src="/crack_render.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const qs = new URLSearchParams(location.search);
+let ws, R = null, me = null, blocks = [], running = false, activeJob = null, joined = false, myGuesses = 0, rateEMA = 0;
+const _yc = new MessageChannel(); let _yr = null; _yc.port1.onmessage = () => { if (_yr) { const r = _yr; _yr = null; r(); } };
+function yieldFast() { return new Promise((r) => { _yr = r; _yc.port2.postMessage(0); }); }   // ~0ms macrotask so new work arrives
+
+function show(id) { for (const s of ["join", "work", "fail"]) $(s).classList.toggle("hide", s !== id); }
+function kindOf(mk) {
+  if (qs.get("kind")) return qs.get("kind");
+  if (mk === "CPU only") return "cpu";
+  const ua = navigator.userAgent;
+  if (/iPad|Tablet/.test(ua) || (/Android/.test(ua) && !/Mobile/.test(ua))) return "tablet";
+  if (/iPhone|Android|Mobi/.test(ua)) return "phone";
+  return "laptop";
+}
+function fmtRate(r) { return r >= 1e9 ? (r / 1e9).toFixed(2) + " billion/s" : r >= 1e6 ? (r / 1e6).toFixed(0) + " million/s" : Math.round(r).toLocaleString() + "/s"; }
+function status(t) { $("statusline").textContent = t; }
+
+async function init() {
+  try {
+    const src = await (await fetch("/crack_sha256.glsl", { cache: "no-store" })).text();
+    R = new CrackRenderer(src, 1024, 1024);
+    try { R.setTarget([0, 0, 0, 0, 0, 0, 0, 0], [97], 1, 1); R.search(0, 1); } catch (e) {}  // warm up: compile the shader now, so the first real crack is fast
+  } catch (e) { $("failMsg").textContent = String(e.message || e); show("fail"); return; }
+  R.short = gpuShortName(R.gpu); R.mk = gpuMaker(R.gpu, R.vendor);
+  $("gpuName").textContent = R.short;
+  $("gpuMaker").textContent = R.mk === "CPU only" ? "No GPU found — this will use the CPU" : `Made by ${R.mk}`;
+  try { $("name").value = qs.get("name") || localStorage.getItem("crackName") || ""; } catch (e) {}
+  $("joinBtn").disabled = false;
+  if (qs.get("auto") === "1") join();
+}
+async function keepAwake() { try { await $("awake").play(); } catch (e) {} try { if (navigator.wakeLock) await navigator.wakeLock.request("screen"); } catch (e) {} }
+function join() { joined = true; keepAwake(); try { localStorage.setItem("crackName", $("name").value.trim()); } catch (e) {} show("work"); connect(); }
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { $("led").classList.add("on"); ws.send(JSON.stringify({ role: "worker", name: $("name").value.trim(), gpu: R.short, maker: R.mk, kind: kindOf(R.mk) })); };
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.t === "welcome") { me = m; document.documentElement.style.setProperty("--me", m.color); $("myName").textContent = m.name; status("Ready! Waiting for the host to start…"); }
+    else if (m.t === "target") { R.setTarget(m.target, m.charset, m.passLen, m.total); activeJob = m.job; blocks = []; myGuesses = 0; $("sGuess").textContent = "0"; status("Guessing…"); }
+    else if (m.t === "work") { if (m.job === activeJob) { blocks.push(m); runBlocks(); } }
+    else if (m.t === "idle") { activeJob = null; blocks = []; status("Ready! Waiting for the host to start…"); }
+    else if (m.t === "cracked") { activeJob = null; blocks = []; status("🎉 Password found! See the big screen."); }
+    else if (m.t === "reset") { activeJob = null; blocks = []; myGuesses = 0; $("sGuess").textContent = "0"; $("sRate").textContent = "—"; status("Ready! Waiting for the host to start…"); }
+  };
+  ws.onclose = () => { $("led").classList.remove("on"); if (joined) { status("Connection lost — reconnecting…"); setTimeout(connect, 2000); } };
+}
+
+const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+// Grind through each assigned block locally (no network wait per guess); report progress ~4x/second.
+async function runBlocks() {
+  if (running || !R) return;
+  running = true;
+  while (blocks.length && ws && ws.readyState === 1) {
+    const blk = blocks.shift();
+    if (blk.job !== activeJob) continue;
+    let base = blk.start, since = 0, lastT = performance.now(), found = -1;
+    while (base < blk.end && activeJob === blk.job && ws.readyState === 1) {
+      const r = R.search(base, blk.reps);          // many units run back-to-back without yielding (keeps the GPU saturated)
+      base += r.tried; since += r.tried; myGuesses += r.tried;
+      const rate = r.tried / (r.ms / 1000);
+      rateEMA = rateEMA ? rateEMA * 0.85 + rate * 0.15 : rate;
+      if (r.found >= 0) { found = r.found; break; }
+      const now = performance.now();
+      if (now - lastT > 200) {                     // report + yield ~5x/second so new work & stop signals get through
+        send({ t: "progress", job: blk.job, base, tried: since }); since = 0; lastT = now;
+        $("sGuess").textContent = myGuesses.toLocaleString(); $("sRate").textContent = fmtRate(rateEMA);
+        status(`Guessing on your GPU… ${fmtRate(rateEMA)}`);
+        await yieldFast();
+      }
+    }
+    if (found >= 0) { send({ t: "found", job: blk.job, base, tried: since, found }); since = 0; }
+    if (since > 0 && activeJob === blk.job) send({ t: "progress", job: blk.job, base, tried: since });
+    if (activeJob === blk.job && ws.readyState === 1) send({ t: "blockdone", job: blk.job, base, tried: 0 });
+    $("sGuess").textContent = myGuesses.toLocaleString();
+  }
+  running = false;
+}
+$("joinBtn").onclick = join;
+init();
+</script>
+</body>
+</html>

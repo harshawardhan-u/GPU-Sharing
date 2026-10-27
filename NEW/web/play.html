@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Nexus Arena</title>
+<style>
+  :root { --bg: #07080d; --panel: #141621; --ink: #f0efec; --ink2: #9aa0b4; --accent: #eb6834; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+               font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden;
+               touch-action: none; -webkit-user-select: none; user-select: none; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #hud { position: fixed; left: 12px; right: 12px; top: 10px; display: flex; gap: 8px; flex-wrap: wrap;
+         pointer-events: none; }
+  .chip { background: rgba(20, 22, 33, 0.82); border: 1px solid #262a3a; border-radius: 10px;
+          padding: 6px 10px; font-size: 13px; line-height: 1.2; }
+  .chip b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+  #gpu { position: fixed; left: 12px; bottom: 10px; font-size: 12px; color: var(--ink2); pointer-events: none; }
+  #join { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+          background: radial-gradient(circle at 50% 40%, #1b1f30, #07080d 70%); }
+  .card { width: min(88vw, 360px); text-align: center; }
+  .card h1 { margin: 0 0 4px; font-size: 32px; letter-spacing: 1px; color: var(--accent); }
+  .card p { color: var(--ink2); margin: 0 0 22px; font-size: 14px; }
+  .card input { width: 100%; box-sizing: border-box; padding: 14px; font-size: 18px; border-radius: 12px;
+                border: 1px solid #2f3447; background: #0f111a; color: var(--ink); text-align: center; }
+  .card button { margin-top: 12px; width: 100%; padding: 14px; font-size: 18px; font-weight: 700; border: 0;
+                 border-radius: 12px; background: var(--accent); color: #fff; }
+  #msg { position: fixed; top: 45%; width: 100%; text-align: center; font-size: 20px; color: var(--ink2);
+         display: none; }
+  #flash { position: fixed; inset: 0; background: rgba(227, 73, 72, 0.28); opacity: 0; pointer-events: none;
+           transition: opacity 0.25s; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="flash"></div>
+<div id="hud" style="display:none">
+  <div class="chip">Survived<b id="streak">0.0 s</b></div>
+  <div class="chip">Best<b id="best">0.0 s</b></div>
+  <div class="chip">Hits<b id="hits">0</b></div>
+  <div class="chip">Your swarm<b id="ups">0 /s</b></div>
+  <div class="chip">Ping<b id="ping">-</b></div>
+</div>
+<div id="gpu"></div>
+<div id="msg"></div>
+<div id="join">
+  <div class="card">
+    <h1>NEXUS ARENA</h1>
+    <p>Your phone draws. A laptop GPU does the physics.<br>Drag your finger to dodge your swarm.</p>
+    <input id="name" maxlength="16" placeholder="Your name" autocomplete="off">
+    <button id="go">Join</button>
+  </div>
+</div>
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const $ = (id) => document.getElementById(id);
+let ws, myId = null, world = 1000, roster = [];
+let prev = null, cur = null, curAt = 0, frameGap = 33;
+let target = null, rtt = 0, lastHitCount = 0;
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener("resize", resize); resize();
+
+function view() {
+  const top = 70, pad = 8;
+  const size = Math.min(innerWidth - pad * 2, innerHeight - top - 30);
+  return { x: (innerWidth - size) / 2, y: top + (innerHeight - top - 30 - size) / 2, s: size / world };
+}
+
+function pointer(e) {
+  const t = e.touches ? e.touches[0] : e;
+  if (!t) return;
+  const v = view();
+  target = { x: (t.clientX - v.x) / v.s / world, y: (t.clientY - v.y) / v.s / world };
+}
+["touchstart", "touchmove", "mousemove", "mousedown"].forEach((ev) =>
+  canvas.addEventListener(ev, (e) => { pointer(e); if (e.cancelable) e.preventDefault(); }, { passive: false }));
+
+$("go").onclick = () => {
+  const name = $("name").value.trim() || "Player";
+  $("join").style.display = "none";
+  $("hud").style.display = "flex";
+  connect(name);
+};
+const auto = new URLSearchParams(location.search).get("autojoin");
+if (auto) { $("name").value = auto; $("go").onclick(); }
+
+function connect(name) {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => ws.send(JSON.stringify({ role: "player", name, ua: navigator.userAgent }));
+  ws.onclose = () => { $("msg").textContent = "Disconnected from the GPU host"; $("msg").style.display = "block"; };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data !== "string") {
+      const dv = new DataView(ev.data);
+      const np = dv.getUint16(0, true), ne = dv.getUint32(2, true);
+      const arr = new Uint16Array(ev.data, 6, (np + ne) * 2);
+      const now = performance.now();
+      if (cur) frameGap = Math.max(16, Math.min(120, 0.8 * frameGap + 0.2 * (now - curAt)));
+      prev = cur; cur = { np, ne, arr }; curAt = now;
+      return;
+    }
+    const m = JSON.parse(ev.data);
+    if (m.type === "welcome") { myId = m.id; world = m.world; $("gpu").textContent = "Physics running on: " + m.gpu + " (remote GPU)"; }
+    else if (m.type === "roster") roster = m.players;
+    else if (m.type === "pong") rtt = performance.now() - m.ts;
+    else if (m.type === "full") { $("msg").textContent = "The arena is full"; $("msg").style.display = "block"; }
+  };
+  setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ t: "ping", ts: performance.now() })); }, 1000);
+  setInterval(() => {
+    if (ws.readyState === 1 && target) ws.send(JSON.stringify({ t: "move", x: target.x, y: target.y, rtt }));
+  }, 33);
+}
+
+function lerpAt(i) {
+  const k = 65535 / world;
+  const a = cur.arr;
+  let x = a[2 * i] / k, y = a[2 * i + 1] / k;
+  if (prev && prev.np === cur.np && prev.ne === cur.ne) {
+    const t = Math.min(1, (performance.now() - curAt) / frameGap);
+    const b = prev.arr;
+    x = b[2 * i] / k + (x - b[2 * i] / k) * t;
+    y = b[2 * i + 1] / k + (y - b[2 * i + 1] / k) * t;
+  }
+  return [x, y];
+}
+
+function draw() {
+  requestAnimationFrame(draw);
+  ctx.fillStyle = "#07080d"; ctx.fillRect(0, 0, innerWidth, innerHeight);
+  const v = view();
+  ctx.strokeStyle = "#151827"; ctx.lineWidth = 1;
+  for (let g = 0; g <= 10; g++) {
+    const p = g * world / 10 * v.s;
+    ctx.beginPath(); ctx.moveTo(v.x + p, v.y); ctx.lineTo(v.x + p, v.y + world * v.s); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(v.x, v.y + p); ctx.lineTo(v.x + world * v.s, v.y + p); ctx.stroke();
+  }
+  ctx.strokeStyle = "#2a2f45"; ctx.strokeRect(v.x, v.y, world * v.s, world * v.s);
+  if (!cur) return;
+  const np = cur.np;
+  const dot = Math.max(1.6, 2.4 * v.s * 1.6);
+  for (const r of roster) {
+    ctx.fillStyle = r.color;
+    for (let i = r.start; i < r.end && i < cur.ne; i++) {
+      const [x, y] = lerpAt(np + i);
+      ctx.fillRect(v.x + x * v.s - dot / 2, v.y + y * v.s - dot / 2, dot, dot);
+    }
+  }
+  roster.forEach((r, idx) => {
+    if (idx >= np) return;
+    const [x, y] = lerpAt(idx);
+    const px = v.x + x * v.s, py = v.y + y * v.s, me = r.id === myId;
+    const rad = me ? 11 : 8;
+    ctx.shadowColor = r.color; ctx.shadowBlur = me ? 22 : 12;
+    ctx.fillStyle = r.invincible ? "#ffffff" : r.color;
+    ctx.beginPath(); ctx.arc(px, py, rad, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    if (me) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, py, rad + 4, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.fillStyle = "#e8e8ee"; ctx.font = "12px system-ui"; ctx.textAlign = "center";
+    ctx.fillText(me ? "YOU" : r.name, px, py - rad - 8);
+  });
+  const mine = roster.find((r) => r.id === myId);
+  if (mine) {
+    $("streak").textContent = mine.streak.toFixed(1) + " s";
+    $("best").textContent = mine.best.toFixed(1) + " s";
+    $("hits").textContent = mine.hits;
+    $("ups").textContent = mine.ups + " /s";
+    if (mine.hits > lastHitCount) { $("flash").style.opacity = 1; setTimeout(() => $("flash").style.opacity = 0, 180); }
+    lastHitCount = mine.hits;
+  }
+  $("ping").textContent = rtt ? rtt.toFixed(0) + " ms" : "-";
+}
+draw();
+</script>
+</body>
+</html>

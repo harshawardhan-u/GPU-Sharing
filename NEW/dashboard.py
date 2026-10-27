@@ -272,7 +272,25 @@ class ComputeNexusApp(ctk.CTk):
         self.rtcompute_link_btn.pack(pady=(0, 5))
 
         self.pool_link_btn = ctk.CTkButton(self.auth_frame, text="🧩 GPU Pool (multi-GPU demo)", fg_color="transparent", text_color="#eb6834", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.show_pool_screen)
-        self.pool_link_btn.pack(pady=(0, 20))
+        self.pool_link_btn.pack(pady=(0, 5))
+
+        self.arena_link_btn = ctk.CTkButton(self.auth_frame, text="📱 Live Arena (phones join by QR)", fg_color="transparent", text_color="#e87ba4", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.show_arena_screen)
+        self.arena_link_btn.pack(pady=(0, 5))
+
+        self.captions_link_btn = ctk.CTkButton(self.auth_frame, text="💬 Live Captions (speech → text on GPU)", fg_color="transparent", text_color="#1baf7a", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.show_captions_screen)
+        self.captions_link_btn.pack(pady=(0, 5))
+
+        self.em_link_btn = ctk.CTkButton(self.auth_frame, text="🌊 EM Wave Lab (Maxwell's equations on GPU)", fg_color="transparent", text_color="#00b8d9", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.show_em_screen)
+        self.em_link_btn.pack(pady=(0, 5))
+
+        self.swarm_link_btn = ctk.CTkButton(self.auth_frame, text="🌐 Room Supercomputer (everyone's phones render together)", fg_color="transparent", text_color="#b48cff", hover=False, font=ctk.CTkFont(size=12, weight="bold", underline=True), command=self.show_swarm_screen)
+        self.swarm_link_btn.pack(pady=(0, 5))
+
+        self.fed_link_btn = ctk.CTkButton(self.auth_frame, text="🧠 Train an AI Together (federated learning on phones)", fg_color="transparent", text_color="#6aa2ff", hover=False, font=ctk.CTkFont(size=12, weight="bold", underline=True), command=self.show_fed_screen)
+        self.fed_link_btn.pack(pady=(0, 5))
+
+        self.crack_link_btn = ctk.CTkButton(self.auth_frame, text="🔐 Password Strength Lab (phones pool GPUs to crack a demo password)", fg_color="transparent", text_color="#F2C744", hover=False, font=ctk.CTkFont(size=12, weight="bold", underline=True), command=self.show_crack_screen)
+        self.crack_link_btn.pack(pady=(0, 20))
 
         self.switch_to_login_mode()
 
@@ -1769,8 +1787,737 @@ class ComputeNexusApp(ctk.CTk):
         self.game_proc = subprocess.Popen(args, cwd=self.POOL_DIR, env=env, creationflags=self._pool_creationflags())
         self.pool_play_status.configure(text="✅ Game launched — the window opens in a few seconds.", text_color="#1DB954")
 
+    # =========================================================================
+    # LIVE ARENA -- runs nexus_hub.py: phones/laptops join by QR code and
+    # play on this laptop's GPU; Mission Control slices the GPU per player.
+    # =========================================================================
+    ARENA_PORT = 8765
+
+    def show_arena_screen(self):
+        self.auth_frame.pack_forget()
+        if not hasattr(self, 'arena_frame'):
+            self.build_arena_screen()
+        self.arena_frame.pack(expand=True, fill="both")
+
+    def back_to_signin_from_arena(self):
+        self.arena_frame.pack_forget()
+        self.auth_frame.pack(expand=True, fill="both")
+
+    def build_arena_screen(self):
+        self.arena_proc = None
+        self.arena_frame = ctk.CTkFrame(self, fg_color="#121212")
+        ctk.CTkButton(self.arena_frame, text="← Back to Sign In", fg_color="transparent", text_color="gray50", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.back_to_signin_from_arena).pack(pady=(20, 0), anchor="w", padx=20)
+        ctk.CTkLabel(self.arena_frame, text="LIVE ARENA", font=ctk.CTkFont(size=26, weight="bold"), text_color="#e87ba4").pack(pady=(10, 5))
+        ctk.CTkLabel(self.arena_frame, text="Anyone on this Wi-Fi scans the QR code and plays in their browser.\nTheir phone only draws; all the physics runs on this laptop's GPU.", text_color="gray50", font=ctk.CTkFont(size=12), justify="center").pack(pady=(0, 12))
+        self.arena_status = ctk.CTkLabel(self.arena_frame, text="Ready to start.", text_color="gray60", font=ctk.CTkFont(size=13))
+        self.arena_status.pack(pady=4)
+        self.arena_start_btn = ctk.CTkButton(self.arena_frame, text="⚡ Start Arena", height=44, width=320, command=self.start_arena)
+        self.arena_start_btn.pack(pady=6)
+        self.arena_qr_label = ctk.CTkLabel(self.arena_frame, text="")
+        self.arena_url_label = ctk.CTkLabel(self.arena_frame, text="", font=ctk.CTkFont(size=18, weight="bold"), text_color="#1DB954")
+        self.arena_btn_row = ctk.CTkFrame(self.arena_frame, fg_color="transparent")
+        ctk.CTkButton(self.arena_btn_row, text="🛰 Open Mission Control", width=210, height=38, command=lambda: webbrowser.open(self.arena_url + "/control")).grid(row=0, column=0, padx=5)
+        ctk.CTkButton(self.arena_btn_row, text="🎮 Play on this laptop", width=210, height=38, fg_color="transparent", border_width=2, command=lambda: webbrowser.open(self.arena_url)).grid(row=0, column=1, padx=5)
+        self.arena_stop_btn = ctk.CTkButton(self.arena_frame, text="Stop Arena", height=36, width=320, fg_color="#E22134", hover_color="#B01625", command=self.stop_arena)
+        self.arena_log = ctk.CTkTextbox(self.arena_frame, height=100, width=560, font=ctk.CTkFont(family="Consolas", size=11))
+
+    def start_arena(self):
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONWARNINGS"] = "ignore"
+        self.arena_proc = subprocess.Popen(
+            [self._pool_python(), "-u", "nexus_hub.py", "--port", str(self.ARENA_PORT)],
+            cwd=self.POOL_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            encoding="utf-8", errors="replace", env=env, creationflags=self._pool_creationflags())
+        threading.Thread(target=self._arena_read_log, args=(self.arena_proc,), daemon=True).start()
+        self.arena_url = f"http://{self.get_lan_ip()}:{self.ARENA_PORT}"
+        self.arena_start_btn.pack_forget()
+        self.arena_status.configure(text="🟢 Arena is live — scan to join (same Wi-Fi):", text_color="#1DB954")
+        try:
+            import qrcode
+            qr = qrcode.make(self.arena_url, box_size=8, border=2)
+            img = (qr.get_image() if hasattr(qr, "get_image") else qr._img).convert("RGB")
+            self.arena_qr_img = ctk.CTkImage(light_image=img, dark_image=img, size=(220, 220))
+            self.arena_qr_label.configure(image=self.arena_qr_img, text="")
+        except Exception:
+            self.arena_qr_label.configure(text="(install 'qrcode' to show a QR code here: pip install qrcode)", text_color="gray50")
+        self.arena_qr_label.pack(pady=4)
+        self.arena_url_label.configure(text=self.arena_url)
+        self.arena_url_label.pack(pady=2)
+        self.arena_btn_row.pack(pady=8)
+        self.arena_stop_btn.pack(pady=4)
+        self.arena_log.delete("1.0", "end")
+        self.arena_log.pack(pady=6)
+
+    def _arena_read_log(self, proc):
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line or "lambda" in line or "Warning" in line or line.startswith("="):
+                continue
+            self.after(0, lambda l=line: (self.arena_log.insert("end", time.strftime("%H:%M:%S  ") + l.strip() + "\n"), self.arena_log.see("end")))
+
+    def stop_arena(self):
+        self._pool_kill(self.arena_proc)
+        self.arena_proc = None
+        for w in (self.arena_qr_label, self.arena_url_label, self.arena_btn_row, self.arena_stop_btn, self.arena_log):
+            w.pack_forget()
+        self.arena_start_btn.pack(pady=6)
+        self.arena_status.configure(text="Ready to start.", text_color="gray60")
+
+    # =========================================================================
+    # LIVE CAPTIONS -- runs nexus_captions.py: a speaker's laptop streams its
+    # microphone here, the GPU turns it into text, listeners read it by QR.
+    # =========================================================================
+    CAPTIONS_PORT = 8770
+
+    def show_captions_screen(self):
+        self.auth_frame.pack_forget()
+        if not hasattr(self, 'captions_frame'):
+            self.build_captions_screen()
+        self.captions_frame.pack(expand=True, fill="both")
+
+    def back_to_signin_from_captions(self):
+        self.captions_frame.pack_forget()
+        self.auth_frame.pack(expand=True, fill="both")
+
+    def build_captions_screen(self):
+        self.captions_proc = None
+        self.speaker_proc = None
+        f = self.captions_frame = ctk.CTkFrame(self, fg_color="#121212")
+        ctk.CTkButton(f, text="← Back to Sign In", fg_color="transparent", text_color="gray50", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.back_to_signin_from_captions).pack(pady=(20, 0), anchor="w", padx=20)
+        ctk.CTkLabel(f, text="LIVE CAPTIONS", font=ctk.CTkFont(size=26, weight="bold"), text_color="#1baf7a").pack(pady=(10, 5))
+        ctk.CTkLabel(f, text="The speaker's laptop sends only audio. This GPU turns it into text with Whisper,\nand everyone reads the captions live on their phone — no app, no cloud.", text_color="gray50", font=ctk.CTkFont(size=12), justify="center").pack(pady=(0, 12))
+        tabs = ctk.CTkFrame(f, fg_color="transparent")
+        tabs.pack(pady=(0, 10))
+        self.cap_host_tab = ctk.CTkButton(tabs, text="Host (GPU laptop)", width=180, command=self.show_cap_host)
+        self.cap_host_tab.grid(row=0, column=0, padx=5)
+        self.cap_spk_tab = ctk.CTkButton(tabs, text="Speaker (any laptop)", width=180, command=self.show_cap_speaker, fg_color="transparent", border_width=2, text_color=("#121212", "#DCE4EE"))
+        self.cap_spk_tab.grid(row=0, column=1, padx=5)
+        box = ctk.CTkFrame(f, fg_color="transparent")
+        box.pack(expand=True, fill="both", padx=40)
+
+        # --- host pane ---
+        h = self.cap_host_pane = ctk.CTkFrame(box, fg_color="transparent")
+        self.cap_settings = ctk.CTkFrame(h, fg_color="transparent")
+        self.cap_settings.pack(pady=4)
+        ctk.CTkLabel(self.cap_settings, text="Model").grid(row=0, column=0, padx=6, sticky="e")
+        self.cap_model = ctk.CTkSegmentedButton(self.cap_settings, values=["small", "medium"])
+        self.cap_model.set("medium")
+        self.cap_model.grid(row=0, column=1, padx=6, pady=4, sticky="w")
+        ctk.CTkLabel(self.cap_settings, text="Spoken language").grid(row=1, column=0, padx=6, sticky="e")
+        self.cap_lang = ctk.CTkOptionMenu(self.cap_settings, values=["Auto-detect", "English", "Tamil", "Hindi", "Telugu", "Malayalam", "Kannada"])
+        self.cap_lang.set("English")
+        self.cap_lang.grid(row=1, column=1, padx=6, pady=4, sticky="w")
+        self.cap_mic_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(self.cap_settings, text="Also caption this laptop's microphone", variable=self.cap_mic_var).grid(row=2, column=0, columnspan=2, pady=6)
+        self.cap_status = ctk.CTkLabel(h, text="Ready.", text_color="gray60", font=ctk.CTkFont(size=13))
+        self.cap_status.pack(pady=4)
+        self.cap_start_btn = ctk.CTkButton(h, text="⚡ Start Live Captions", height=44, width=320, command=self.start_captions)
+        self.cap_start_btn.pack(pady=6)
+        self.cap_live_row = ctk.CTkFrame(h, fg_color="transparent")
+        self.cap_qr = ctk.CTkLabel(self.cap_live_row, text="")
+        self.cap_qr.grid(row=0, column=0, rowspan=4, padx=12)
+        self.cap_url = ctk.CTkLabel(self.cap_live_row, text="", font=ctk.CTkFont(size=16, weight="bold"), text_color="#1DB954")
+        self.cap_url.grid(row=0, column=1, sticky="w")
+        ctk.CTkLabel(self.cap_live_row, text="Speaker code (for the speaker's laptop):", text_color="gray60").grid(row=1, column=1, sticky="w")
+        self.cap_code = ctk.CTkLabel(self.cap_live_row, text="", font=ctk.CTkFont(size=30, weight="bold"), text_color="#1baf7a")
+        self.cap_code.grid(row=2, column=1, sticky="w")
+        ctk.CTkButton(self.cap_live_row, text="📺 Open captions page", width=220, command=lambda: webbrowser.open(self.cap_url_text)).grid(row=3, column=1, sticky="w", pady=6)
+        self.cap_stop_btn = ctk.CTkButton(h, text="Stop Captions", height=36, width=320, fg_color="#E22134", hover_color="#B01625", command=self.stop_captions)
+        self.cap_log = ctk.CTkTextbox(h, height=110, width=640, font=ctk.CTkFont(family="Consolas", size=11), wrap="word")
+
+        # --- speaker pane ---
+        s = self.cap_spk_pane = ctk.CTkFrame(box, fg_color="transparent")
+        ctk.CTkButton(s, text="🔍 Find the GPU laptop", height=38, width=320, command=self.scan_captions_host).pack(pady=(12, 6))
+        self.cap_spk_host = ctk.CTkEntry(s, width=320, height=40, placeholder_text="GPU laptop IP (auto-filled, or type it)")
+        self.cap_spk_host.pack(pady=6)
+        self.cap_spk_code = ctk.CTkEntry(s, width=320, height=40, placeholder_text="Speaker code", font=ctk.CTkFont(size=16, weight="bold"), justify="center")
+        self.cap_spk_code.pack(pady=6)
+        self.cap_spk_status = ctk.CTkLabel(s, text="", text_color="gray60", wraplength=420)
+        self.cap_spk_status.pack(pady=6)
+        self.cap_spk_btn = ctk.CTkButton(s, text="🎙 Start Speaking", height=44, width=320, command=self.toggle_speaker)
+        self.cap_spk_btn.pack(pady=6)
+        self.show_cap_host()
+
+    def show_cap_host(self):
+        self.cap_spk_pane.pack_forget()
+        self.cap_host_pane.pack(expand=True, fill="both")
+        self.cap_host_tab.configure(fg_color=["#3b8ed0", "#1f538d"])
+        self.cap_spk_tab.configure(fg_color="transparent")
+
+    def show_cap_speaker(self):
+        self.cap_host_pane.pack_forget()
+        self.cap_spk_pane.pack(expand=True, fill="both")
+        self.cap_spk_tab.configure(fg_color=["#3b8ed0", "#1f538d"])
+        self.cap_host_tab.configure(fg_color="transparent")
+
+    def start_captions(self):
+        langs = {"Auto-detect": "auto", "English": "en", "Tamil": "ta", "Hindi": "hi", "Telugu": "te", "Malayalam": "ml", "Kannada": "kn"}
+        code = "".join(secrets.choice("0123456789") for _ in range(6))
+        args = [self._pool_python(), "-u", "nexus_captions.py", "--serve", "--code", code, "--model", self.cap_model.get(),
+                "--language", langs[self.cap_lang.get()], "--port", str(self.CAPTIONS_PORT)]
+        if self.cap_mic_var.get():
+            args.append("--mic")
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONWARNINGS"] = "ignore"
+        self.captions_proc = subprocess.Popen(args, cwd=self.POOL_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                              encoding="utf-8", errors="replace", env=env, creationflags=self._pool_creationflags())
+        threading.Thread(target=self._captions_read_log, args=(self.captions_proc,), daemon=True).start()
+        self.cap_url_text = f"http://{self.get_lan_ip()}:{self.CAPTIONS_PORT}"
+        self.cap_settings.pack_forget()
+        self.cap_start_btn.pack_forget()
+        self.cap_status.configure(text="⏳ Loading the speech model on the GPU (10–20 s the first time)...", text_color="#f39c12")
+        try:
+            import qrcode
+            qr = qrcode.make(self.cap_url_text, box_size=8, border=2)
+            img = (qr.get_image() if hasattr(qr, "get_image") else qr._img).convert("RGB")
+            self.cap_qr_img = ctk.CTkImage(light_image=img, dark_image=img, size=(170, 170))
+            self.cap_qr.configure(image=self.cap_qr_img, text="")
+        except Exception:
+            self.cap_qr.configure(text="(pip install qrcode)")
+        self.cap_url.configure(text=self.cap_url_text)
+        self.cap_code.configure(text=code)
+        self.cap_live_row.pack(pady=6)
+        self.cap_stop_btn.pack(pady=4)
+        self.cap_log.delete("1.0", "end")
+        self.cap_log.pack(pady=6)
+
+    def _captions_read_log(self, proc):
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line or "Warning" in line or line.startswith("=") or "%|" in line:
+                continue
+            if "SPEAKER CODE" in line:
+                self.after(0, lambda: self.cap_status.configure(text="🟢 Live — scan to read captions, speak to see them appear", text_color="#1DB954"))
+            line = line.replace("[captions] ", "")
+            self.after(0, lambda l=line: (self.cap_log.insert("end", l.strip() + "\n"), self.cap_log.see("end")))
+
+    def stop_captions(self):
+        self._pool_kill(self.captions_proc)
+        self.captions_proc = None
+        for w in (self.cap_live_row, self.cap_stop_btn, self.cap_log):
+            w.pack_forget()
+        self.cap_settings.pack(pady=4)
+        self.cap_start_btn.pack(pady=6)
+        self.cap_status.configure(text="Ready.", text_color="gray60")
+
+    def scan_captions_host(self):
+        self.cap_spk_status.configure(text="Searching the network (3 s)...", text_color="#f39c12")
+
+        def work():
+            try:
+                import nexus_captions
+                hosts = nexus_captions.discover(3.0)
+            except Exception:
+                hosts = []
+            def show():
+                if hosts:
+                    self.cap_spk_host.delete(0, "end")
+                    self.cap_spk_host.insert(0, hosts[0]["ip"])
+                    self.cap_spk_status.configure(text=f"Found {hosts[0]['host']} ({hosts[0]['gpu']})", text_color="#1DB954")
+                else:
+                    self.cap_spk_status.configure(text="Not found. Type the GPU laptop's IP shown on its captions screen.", text_color="#E22134")
+            self.after(0, show)
+        threading.Thread(target=work, daemon=True).start()
+
+    def toggle_speaker(self):
+        if self.speaker_proc and self.speaker_proc.poll() is None:
+            self._pool_kill(self.speaker_proc)
+            self.speaker_proc = None
+            self.cap_spk_btn.configure(text="🎙 Start Speaking", fg_color=["#3b8ed0", "#1f538d"])
+            self.cap_spk_status.configure(text="Stopped.", text_color="gray60")
+            return
+        host, code = self.cap_spk_host.get().strip(), self.cap_spk_code.get().strip()
+        if not host or len(code) != 6 or not code.isdigit():
+            self.cap_spk_status.configure(text="❌ Enter the GPU laptop's IP and the 6-digit speaker code.", text_color="#E22134")
+            return
+        env = os.environ.copy()
+        env["PYTHONWARNINGS"] = "ignore"
+        self.speaker_proc = subprocess.Popen([self._pool_python(), "-u", "nexus_captions.py", "--speak", "--host", host,
+                                              "--code", code, "--port", str(self.CAPTIONS_PORT)],
+                                             cwd=self.POOL_DIR, env=env, creationflags=self._pool_creationflags())
+        self.cap_spk_btn.configure(text="■ Stop Speaking", fg_color="#E22134")
+        self.cap_spk_status.configure(text=f"🎙 Streaming your microphone to {host} — speak now.", text_color="#1DB954")
+
+    # =========================================================================
+    # EM WAVE LAB -- runs nexus_em.py: this GPU solves Maxwell's equations
+    # live; anyone on the Wi-Fi opens the lab by QR and edits the scene.
+    # =========================================================================
+    EM_PORT = 8780
+
+    def show_em_screen(self):
+        self.auth_frame.pack_forget()
+        if not hasattr(self, 'em_frame'):
+            self.build_em_screen()
+        self.em_frame.pack(expand=True, fill="both")
+
+    def back_to_signin_from_em(self):
+        self.em_frame.pack_forget()
+        self.auth_frame.pack(expand=True, fill="both")
+
+    def build_em_screen(self):
+        self.em_proc = None
+        f = self.em_frame = ctk.CTkFrame(self, fg_color="#121212")
+        ctk.CTkButton(f, text="← Back to Sign In", fg_color="transparent", text_color="gray50", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.back_to_signin_from_em).pack(pady=(20, 0), anchor="w", padx=20)
+        ctk.CTkLabel(f, text="EM WAVE LAB", font=ctk.CTkFont(size=26, weight="bold"), text_color="#00b8d9").pack(pady=(10, 5))
+        ctk.CTkLabel(f, text="This GPU solves Maxwell's equations on a grid of up to a million cells, thousands of times a second.\nAnyone on the Wi-Fi scans the QR code, places antennas and draws walls, and watches the waves live.", text_color="gray50", font=ctk.CTkFont(size=12), justify="center").pack(pady=(0, 12))
+        self.em_settings = ctk.CTkFrame(f, fg_color="transparent")
+        self.em_settings.pack(pady=4)
+        ctk.CTkLabel(self.em_settings, text="Solver").grid(row=0, column=0, padx=6, sticky="e")
+        self.em_solver = ctk.CTkSegmentedButton(self.em_settings, values=["GPU", "CPU (to compare)"])
+        self.em_solver.set("GPU")
+        self.em_solver.grid(row=0, column=1, padx=6, pady=4, sticky="w")
+        ctk.CTkLabel(self.em_settings, text="Grid size").grid(row=1, column=0, padx=6, sticky="e")
+        self.em_grid = ctk.CTkSegmentedButton(self.em_settings, values=["512", "768", "1024"])
+        self.em_grid.set("768")
+        self.em_grid.grid(row=1, column=1, padx=6, pady=4, sticky="w")
+        self.em_status = ctk.CTkLabel(f, text="Ready.", text_color="gray60", font=ctk.CTkFont(size=13))
+        self.em_status.pack(pady=4)
+        self.em_start_btn = ctk.CTkButton(f, text="⚡ Start EM Wave Lab", height=44, width=320, command=self.start_em)
+        self.em_start_btn.pack(pady=6)
+        self.em_live_row = ctk.CTkFrame(f, fg_color="transparent")
+        self.em_qr = ctk.CTkLabel(self.em_live_row, text="")
+        self.em_qr.grid(row=0, column=0, rowspan=4, padx=12)
+        self.em_url = ctk.CTkLabel(self.em_live_row, text="", font=ctk.CTkFont(size=16, weight="bold"), text_color="#1DB954")
+        self.em_url.grid(row=0, column=1, sticky="w")
+        self.em_speed_title = ctk.CTkLabel(self.em_live_row, text="Max solver speed:", text_color="gray60")
+        self.em_speed_title.grid(row=1, column=1, sticky="w")
+        self.em_speed = ctk.CTkLabel(self.em_live_row, text="—", font=ctk.CTkFont(size=24, weight="bold"), text_color="#00b8d9")
+        self.em_speed.grid(row=2, column=1, sticky="w")
+        self.em_live = ctk.CTkLabel(self.em_live_row, text="", text_color="gray60")
+        self.em_live.grid(row=3, column=1, sticky="w")
+        ctk.CTkButton(self.em_live_row, text="🌊 Open the lab", width=220, command=lambda: webbrowser.open(self.em_url_text)).grid(row=4, column=1, sticky="w", pady=6)
+        self.em_stop_btn = ctk.CTkButton(f, text="Stop Lab", height=36, width=320, fg_color="#E22134", hover_color="#B01625", command=self.stop_em)
+        self.em_log = ctk.CTkTextbox(f, height=110, width=640, font=ctk.CTkFont(family="Consolas", size=11), wrap="word")
+
+    def start_em(self):
+        args = [self._pool_python(), "-u", "nexus_em.py", "--grid", self.em_grid.get(), "--port", str(self.EM_PORT)]
+        if self.em_solver.get() != "GPU":
+            args.append("--cpu")
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONWARNINGS"] = "ignore"
+        self.em_proc = subprocess.Popen(args, cwd=self.POOL_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                        encoding="utf-8", errors="replace", env=env, creationflags=self._pool_creationflags())
+        threading.Thread(target=self._em_read_log, args=(self.em_proc,), daemon=True).start()
+        self.em_url_text = f"http://{self.get_lan_ip()}:{self.EM_PORT}"
+        self.em_settings.pack_forget()
+        self.em_start_btn.pack_forget()
+        self.em_status.configure(text="⏳ Starting the solver...", text_color="#f39c12")
+        try:
+            import qrcode
+            qr = qrcode.make(self.em_url_text, box_size=8, border=2)
+            img = (qr.get_image() if hasattr(qr, "get_image") else qr._img).convert("RGB")
+            self.em_qr_img = ctk.CTkImage(light_image=img, dark_image=img, size=(170, 170))
+            self.em_qr.configure(image=self.em_qr_img, text="")
+        except Exception:
+            self.em_qr.configure(text="(pip install qrcode)")
+        self.em_url.configure(text=self.em_url_text)
+        self.em_speed.configure(text="measuring...")
+        self.em_live.configure(text="")
+        self.em_speed_title.configure(text=f"Max solver speed on the {'GPU' if self.em_solver.get() == 'GPU' else 'CPU'}:")
+        self.em_live_row.pack(pady=6)
+        self.em_stop_btn.pack(pady=4)
+        self.em_log.delete("1.0", "end")
+        self.em_log.pack(pady=6)
+
+    def _em_read_log(self, proc):
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line or "Warning" in line or line.startswith("="):
+                continue
+            if "EM WAVE LAB on" in line:
+                self.after(0, lambda: self.em_status.configure(text="🟢 Live — scan to open the lab, tap to place antennas", text_color="#1DB954"))
+            if line.startswith("[em] max speed:"):
+                p = line.split()
+                self.after(0, lambda p=p: self.em_speed.configure(text=f"{int(p[3]):,} steps/s  ·  {float(p[5]):,.0f} M cell-updates/s"))
+            elif line.startswith("[em]") and "steps/s" in line:
+                p = line.split()
+                self.after(0, lambda p=p: self.em_live.configure(text=f"Live: {p[1]} steps/s (limited to 600 so the waves stay watchable) · {p[6]} viewer(s)"))
+            line = line.replace("[em] ", "")
+            self.after(0, lambda l=line: (self.em_log.insert("end", time.strftime("%H:%M:%S  ") + l.strip() + "\n"), self.em_log.see("end")))
+
+    def stop_em(self):
+        self._pool_kill(self.em_proc)
+        self.em_proc = None
+        for w in (self.em_live_row, self.em_stop_btn, self.em_log):
+            w.pack_forget()
+        self.em_settings.pack(pady=4)
+        self.em_start_btn.pack(pady=6)
+        self.em_status.configure(text="Ready.", text_color="gray60")
+
+    # =========================================================================
+    # ROOM SUPERCOMPUTER -- runs nexus_swarm.py: everyone in the room scans a QR
+    # code and their phone's GPU renders squares of one giant picture; this
+    # laptop hands out the squares, checks them and shows the result.
+    # =========================================================================
+    SWARM_PORT = 8790
+
+    def show_swarm_screen(self):
+        self.auth_frame.pack_forget()
+        if not hasattr(self, 'swarm_frame'):
+            self.build_swarm_screen()
+        self.swarm_frame.pack(expand=True, fill="both")
+
+    def back_to_signin_from_swarm(self):
+        self.swarm_frame.pack_forget()
+        self.auth_frame.pack(expand=True, fill="both")
+
+    def build_swarm_screen(self):
+        self.swarm_proc = None
+        self.swarm_gpu_proc = None
+        self.swarm_cpu_proc = None
+        f = self.swarm_frame = ctk.CTkFrame(self, fg_color="#121212")
+        ctk.CTkButton(f, text="← Back to Sign In", fg_color="transparent", text_color="gray50", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.back_to_signin_from_swarm).pack(pady=(20, 0), anchor="w", padx=20)
+        ctk.CTkLabel(f, text="ROOM SUPERCOMPUTER", font=ctk.CTkFont(size=26, weight="bold"), text_color="#b48cff").pack(pady=(10, 5))
+        ctk.CTkLabel(f, text="Everyone in the room scans the QR code. Each phone's GPU draws squares of one giant 3D picture,\nthis laptop checks every phone's work, and the picture appears on the projector.", text_color="gray50", font=ctk.CTkFont(size=12), justify="center").pack(pady=(0, 12))
+        self.swarm_status = ctk.CTkLabel(f, text="Ready.", text_color="gray60", font=ctk.CTkFont(size=13))
+        self.swarm_status.pack(pady=4)
+        self.swarm_start_btn = ctk.CTkButton(f, text="⚡ Start Room Supercomputer", height=44, width=320, command=self.start_swarm)
+        self.swarm_start_btn.pack(pady=6)
+        self.swarm_live_row = ctk.CTkFrame(f, fg_color="transparent")
+        self.swarm_qr = ctk.CTkLabel(self.swarm_live_row, text="")
+        self.swarm_qr.grid(row=0, column=0, rowspan=5, padx=12)
+        ctk.CTkLabel(self.swarm_live_row, text="Phones scan this, or open:", text_color="gray60").grid(row=0, column=1, sticky="w")
+        self.swarm_url = ctk.CTkLabel(self.swarm_live_row, text="", font=ctk.CTkFont(size=16, weight="bold"), text_color="#1DB954")
+        self.swarm_url.grid(row=1, column=1, sticky="w")
+        ctk.CTkButton(self.swarm_live_row, text="🖥 Open the projector wall", width=260, command=lambda: webbrowser.open(self.swarm_url_text + "/wall")).grid(row=2, column=1, sticky="w", pady=(8, 4))
+        self.swarm_gpu_btn = ctk.CTkButton(self.swarm_live_row, text="➕ Add this laptop's GPU as a worker", width=260, fg_color="transparent", border_width=2, command=self.toggle_swarm_gpu)
+        self.swarm_gpu_btn.grid(row=3, column=1, sticky="w", pady=4)
+        self.swarm_cpu_btn = ctk.CTkButton(self.swarm_live_row, text="➕ Add a CPU-only worker (to compare)", width=260, fg_color="transparent", border_width=2, command=self.toggle_swarm_cpu)
+        self.swarm_cpu_btn.grid(row=4, column=1, sticky="w", pady=4)
+        self.swarm_stop_btn = ctk.CTkButton(f, text="Stop", height=36, width=320, fg_color="#E22134", hover_color="#B01625", command=self.stop_swarm)
+        self.swarm_log = ctk.CTkTextbox(f, height=120, width=660, font=ctk.CTkFont(family="Consolas", size=11), wrap="word")
+
+    def start_swarm(self):
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONWARNINGS"] = "ignore"
+        self.swarm_proc = subprocess.Popen([self._pool_python(), "-u", "nexus_swarm.py", "--port", str(self.SWARM_PORT)],
+                                           cwd=self.POOL_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                           encoding="utf-8", errors="replace", env=env, creationflags=self._pool_creationflags())
+        threading.Thread(target=self._swarm_read_log, args=(self.swarm_proc,), daemon=True).start()
+        self.swarm_url_text = f"http://{self.get_lan_ip()}:{self.SWARM_PORT}"
+        self.swarm_start_btn.pack_forget()
+        self.swarm_status.configure(text="⏳ Starting…", text_color="#f39c12")
+        try:
+            import qrcode
+            qr = qrcode.make(self.swarm_url_text, box_size=8, border=2)
+            img = (qr.get_image() if hasattr(qr, "get_image") else qr._img).convert("RGB")
+            self.swarm_qr_img = ctk.CTkImage(light_image=img, dark_image=img, size=(190, 190))
+            self.swarm_qr.configure(image=self.swarm_qr_img, text="")
+        except Exception:
+            self.swarm_qr.configure(text="(pip install qrcode)")
+        self.swarm_url.configure(text=self.swarm_url_text)
+        self.swarm_live_row.pack(pady=6)
+        self.swarm_stop_btn.pack(pady=4)
+        self.swarm_log.delete("1.0", "end")
+        self.swarm_log.pack(pady=6)
+
+    def _swarm_read_log(self, proc):
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line or "Warning" in line or line.startswith("="):
+                continue
+            if "ROOM SUPERCOMPUTER" in line:
+                self.after(0, lambda: (self.swarm_status.configure(text="🟢 Live — open the projector wall, then ask everyone to scan the QR code", text_color="#1DB954"),
+                                       webbrowser.open(self.swarm_url_text + "/wall")))
+            line = line.replace("[swarm] ", "")
+            self.after(0, lambda l=line: (self.swarm_log.insert("end", time.strftime("%H:%M:%S  ") + l.strip() + "\n"), self.swarm_log.see("end")))
+
+    def _chrome_path(self):
+        for p in (r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                  r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                  os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+                  r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                  r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"):
+            if os.path.exists(p):
+                return p
+        return None
+
+    def _browser_worker(self, port, name, kind, flags, status_label=None):
+        """A hidden browser that joins a demo (swarm or federated) like a phone would,
+        using this laptop's GPU (or CPU)."""
+        import tempfile
+        import urllib.parse
+        chrome = self._chrome_path()
+        if not chrome:
+            if status_label:
+                status_label.configure(text="❌ Chrome or Edge is needed for a laptop worker.", text_color="#E22134")
+            return None
+        profile = tempfile.mkdtemp(prefix="nx_worker_")
+        url = f"http://127.0.0.1:{port}/?auto=1&kind={kind}&name={urllib.parse.quote(name)}"
+        return subprocess.Popen([chrome, "--headless=new", f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
+                                 "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
+                                 "--disable-backgrounding-occluded-windows", *flags, url],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=self._pool_creationflags())
+
+    def _swarm_browser_worker(self, name, kind, flags):
+        return self._browser_worker(self.SWARM_PORT, name, kind, flags, self.swarm_status)
+
+    GPU_WORKER_FLAGS = ["--use-angle=d3d11", "--enable-gpu", "--ignore-gpu-blocklist", "--force_high_performance_gpu"]
+    CPU_WORKER_FLAGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
+
+    def toggle_swarm_gpu(self):
+        if self.swarm_gpu_proc and self.swarm_gpu_proc.poll() is None:
+            self._pool_kill(self.swarm_gpu_proc)
+            self.swarm_gpu_proc = None
+            self.swarm_gpu_btn.configure(text="➕ Add this laptop's GPU as a worker", fg_color="transparent")
+            return
+        self.swarm_gpu_proc = self._swarm_browser_worker("Host laptop GPU", "laptop",
+                                                         ["--use-angle=d3d11", "--enable-gpu", "--ignore-gpu-blocklist", "--force_high_performance_gpu"])
+        if self.swarm_gpu_proc:
+            self.swarm_gpu_btn.configure(text="■ Remove this laptop's GPU", fg_color="#3b2a5a")
+
+    def toggle_swarm_cpu(self):
+        if self.swarm_cpu_proc and self.swarm_cpu_proc.poll() is None:
+            self._pool_kill(self.swarm_cpu_proc)
+            self.swarm_cpu_proc = None
+            self.swarm_cpu_btn.configure(text="➕ Add a CPU-only worker (to compare)", fg_color="transparent")
+            return
+        self.swarm_cpu_proc = self._swarm_browser_worker("Laptop CPU (no GPU)", "cpu",
+                                                         ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"])
+        if self.swarm_cpu_proc:
+            self.swarm_cpu_btn.configure(text="■ Remove the CPU-only worker", fg_color="#3b2a5a")
+
+    def stop_swarm(self):
+        for name in ('swarm_gpu_proc', 'swarm_cpu_proc', 'swarm_proc'):
+            self._pool_kill(getattr(self, name, None))
+            setattr(self, name, None)
+        self.swarm_gpu_btn.configure(text="➕ Add this laptop's GPU as a worker", fg_color="transparent")
+        self.swarm_cpu_btn.configure(text="➕ Add a CPU-only worker (to compare)", fg_color="transparent")
+        for w in (self.swarm_live_row, self.swarm_stop_btn, self.swarm_log):
+            w.pack_forget()
+        self.swarm_start_btn.pack(pady=6)
+        self.swarm_status.configure(text="Ready.", text_color="gray60")
+
+    # =========================================================================
+    # TRAIN AN AI TOGETHER -- runs nexus_fed.py: phones each train a shared
+    # digit-recognition AI on their own private data (GPU, TensorFlow.js); this
+    # laptop averages the updates, rejects poisoned ones, and shows accuracy.
+    # =========================================================================
+    FED_PORT = 8795
+
+    def show_fed_screen(self):
+        self.auth_frame.pack_forget()
+        if not hasattr(self, 'fed_frame'):
+            self.build_fed_screen()
+        self.fed_frame.pack(expand=True, fill="both")
+
+    def back_to_signin_from_fed(self):
+        self.fed_frame.pack_forget()
+        self.auth_frame.pack(expand=True, fill="both")
+
+    def build_fed_screen(self):
+        self.fed_proc = None
+        self.fed_gpu_proc = None
+        self.fed_cpu_proc = None
+        f = self.fed_frame = ctk.CTkFrame(self, fg_color="#121212")
+        ctk.CTkButton(f, text="← Back to Sign In", fg_color="transparent", text_color="gray50", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.back_to_signin_from_fed).pack(pady=(20, 0), anchor="w", padx=20)
+        ctk.CTkLabel(f, text="TRAIN AN AI TOGETHER", font=ctk.CTkFont(size=26, weight="bold"), text_color="#6aa2ff").pack(pady=(10, 5))
+        ctk.CTkLabel(f, text="Each phone trains a shared digit-recognition AI on its own private data using the phone's GPU,\nand sends back only what it learned. This laptop averages it, rejects poisoned updates, and the accuracy climbs live.", text_color="gray50", font=ctk.CTkFont(size=12), justify="center").pack(pady=(0, 12))
+        self.fed_status = ctk.CTkLabel(f, text="Ready.", text_color="gray60", font=ctk.CTkFont(size=13))
+        self.fed_status.pack(pady=4)
+        self.fed_start_btn = ctk.CTkButton(f, text="⚡ Start the Federated AI server", height=44, width=320, command=self.start_fed)
+        self.fed_start_btn.pack(pady=6)
+        self.fed_live_row = ctk.CTkFrame(f, fg_color="transparent")
+        self.fed_qr = ctk.CTkLabel(self.fed_live_row, text="")
+        self.fed_qr.grid(row=0, column=0, rowspan=5, padx=12)
+        ctk.CTkLabel(self.fed_live_row, text="Phones scan this, or open:", text_color="gray60").grid(row=0, column=1, sticky="w")
+        self.fed_url = ctk.CTkLabel(self.fed_live_row, text="", font=ctk.CTkFont(size=16, weight="bold"), text_color="#1DB954")
+        self.fed_url.grid(row=1, column=1, sticky="w")
+        ctk.CTkButton(self.fed_live_row, text="🖥 Open the projector wall", width=260, command=lambda: webbrowser.open(self.fed_url_text + "/wall")).grid(row=2, column=1, sticky="w", pady=(8, 4))
+        self.fed_gpu_btn = ctk.CTkButton(self.fed_live_row, text="➕ Add this laptop's GPU as a trainer", width=260, fg_color="transparent", border_width=2, command=self.toggle_fed_gpu)
+        self.fed_gpu_btn.grid(row=3, column=1, sticky="w", pady=4)
+        self.fed_cpu_btn = ctk.CTkButton(self.fed_live_row, text="➕ Add a CPU-only trainer (to compare)", width=260, fg_color="transparent", border_width=2, command=self.toggle_fed_cpu)
+        self.fed_cpu_btn.grid(row=4, column=1, sticky="w", pady=4)
+        self.fed_stop_btn = ctk.CTkButton(f, text="Stop", height=36, width=320, fg_color="#E22134", hover_color="#B01625", command=self.stop_fed)
+        self.fed_log = ctk.CTkTextbox(f, height=120, width=660, font=ctk.CTkFont(family="Consolas", size=11), wrap="word")
+
+    def start_fed(self):
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONWARNINGS"] = "ignore"
+        self.fed_proc = subprocess.Popen([self._pool_python(), "-u", "nexus_fed.py", "--port", str(self.FED_PORT)],
+                                         cwd=self.POOL_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                         encoding="utf-8", errors="replace", env=env, creationflags=self._pool_creationflags())
+        threading.Thread(target=self._fed_read_log, args=(self.fed_proc,), daemon=True).start()
+        self.fed_url_text = f"http://{self.get_lan_ip()}:{self.FED_PORT}"
+        self.fed_start_btn.pack_forget()
+        self.fed_status.configure(text="⏳ Starting…", text_color="#f39c12")
+        try:
+            import qrcode
+            qr = qrcode.make(self.fed_url_text, box_size=8, border=2)
+            img = (qr.get_image() if hasattr(qr, "get_image") else qr._img).convert("RGB")
+            self.fed_qr_img = ctk.CTkImage(light_image=img, dark_image=img, size=(190, 190))
+            self.fed_qr.configure(image=self.fed_qr_img, text="")
+        except Exception:
+            self.fed_qr.configure(text="(pip install qrcode)")
+        self.fed_url.configure(text=self.fed_url_text)
+        self.fed_live_row.pack(pady=6)
+        self.fed_stop_btn.pack(pady=4)
+        self.fed_log.delete("1.0", "end")
+        self.fed_log.pack(pady=6)
+
+    def _fed_read_log(self, proc):
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line or "Warning" in line or line.startswith("="):
+                continue
+            if "FEDERATED LEARNING" in line:
+                self.after(0, lambda: (self.fed_status.configure(text="🟢 Live — open the projector wall, then ask everyone to scan the QR code", text_color="#1DB954"),
+                                       webbrowser.open(self.fed_url_text + "/wall")))
+            line = line.replace("[fed] ", "")
+            self.after(0, lambda l=line: (self.fed_log.insert("end", time.strftime("%H:%M:%S  ") + l.strip() + "\n"), self.fed_log.see("end")))
+
+    def toggle_fed_gpu(self):
+        if self.fed_gpu_proc and self.fed_gpu_proc.poll() is None:
+            self._pool_kill(self.fed_gpu_proc)
+            self.fed_gpu_proc = None
+            self.fed_gpu_btn.configure(text="➕ Add this laptop's GPU as a trainer", fg_color="transparent")
+            return
+        self.fed_gpu_proc = self._browser_worker(self.FED_PORT, "Host laptop GPU", "laptop", self.GPU_WORKER_FLAGS, self.fed_status)
+        if self.fed_gpu_proc:
+            self.fed_gpu_btn.configure(text="■ Remove this laptop's GPU", fg_color="#2a3a5a")
+
+    def toggle_fed_cpu(self):
+        if self.fed_cpu_proc and self.fed_cpu_proc.poll() is None:
+            self._pool_kill(self.fed_cpu_proc)
+            self.fed_cpu_proc = None
+            self.fed_cpu_btn.configure(text="➕ Add a CPU-only trainer (to compare)", fg_color="transparent")
+            return
+        self.fed_cpu_proc = self._browser_worker(self.FED_PORT, "Laptop CPU (no GPU)", "cpu", self.CPU_WORKER_FLAGS, self.fed_status)
+        if self.fed_cpu_proc:
+            self.fed_cpu_btn.configure(text="■ Remove the CPU-only trainer", fg_color="#2a3a5a")
+
+    def stop_fed(self):
+        for name in ('fed_gpu_proc', 'fed_cpu_proc', 'fed_proc'):
+            self._pool_kill(getattr(self, name, None))
+            setattr(self, name, None)
+        self.fed_gpu_btn.configure(text="➕ Add this laptop's GPU as a trainer", fg_color="transparent")
+        self.fed_cpu_btn.configure(text="➕ Add a CPU-only trainer (to compare)", fg_color="transparent")
+        for w in (self.fed_live_row, self.fed_stop_btn, self.fed_log):
+            w.pack_forget()
+        self.fed_start_btn.pack(pady=6)
+        self.fed_status.configure(text="Ready.", text_color="gray60")
+
+    # =========================================================================
+    # PASSWORD STRENGTH LAB -- runs nexus_crack.py: phones pool their GPUs to
+    # brute-force a random demo password, showing why length & variety matter.
+    # The target is always a random password this tool makes up; it is a
+    # teaching demo about password strength, not an attack tool.
+    # =========================================================================
+    CRACK_PORT = 8798
+
+    def show_crack_screen(self):
+        self.auth_frame.pack_forget()
+        if not hasattr(self, 'crack_frame'):
+            self.build_crack_screen()
+        self.crack_frame.pack(expand=True, fill="both")
+
+    def back_to_signin_from_crack(self):
+        self.crack_frame.pack_forget()
+        self.auth_frame.pack(expand=True, fill="both")
+
+    def build_crack_screen(self):
+        self.crack_proc = None
+        self.crack_gpu_proc = None
+        self.crack_cpu_proc = None
+        f = self.crack_frame = ctk.CTkFrame(self, fg_color="#121212")
+        ctk.CTkButton(f, text="← Back to Sign In", fg_color="transparent", text_color="gray50", hover=False, font=ctk.CTkFont(size=12, underline=True), command=self.back_to_signin_from_crack).pack(pady=(20, 0), anchor="w", padx=20)
+        ctk.CTkLabel(f, text="PASSWORD STRENGTH LAB", font=ctk.CTkFont(size=26, weight="bold"), text_color="#F2C744").pack(pady=(10, 5))
+        ctk.CTkLabel(f, text="Phones pool their GPUs to brute-force a RANDOM demo password this laptop makes up — showing how fast a short\npassword falls and why a longer one is safe. No real passwords are involved; it's a teaching demo, not an attack tool.", text_color="gray50", font=ctk.CTkFont(size=12), justify="center").pack(pady=(0, 12))
+        self.crack_status = ctk.CTkLabel(f, text="Ready.", text_color="gray60", font=ctk.CTkFont(size=13))
+        self.crack_status.pack(pady=4)
+        self.crack_start_btn = ctk.CTkButton(f, text="⚡ Start the Password Lab server", height=44, width=320, command=self.start_crack)
+        self.crack_start_btn.pack(pady=6)
+        self.crack_live_row = ctk.CTkFrame(f, fg_color="transparent")
+        self.crack_qr = ctk.CTkLabel(self.crack_live_row, text="")
+        self.crack_qr.grid(row=0, column=0, rowspan=5, padx=12)
+        ctk.CTkLabel(self.crack_live_row, text="Phones scan this, or open:", text_color="gray60").grid(row=0, column=1, sticky="w")
+        self.crack_url = ctk.CTkLabel(self.crack_live_row, text="", font=ctk.CTkFont(size=16, weight="bold"), text_color="#1DB954")
+        self.crack_url.grid(row=1, column=1, sticky="w")
+        ctk.CTkButton(self.crack_live_row, text="🖥 Open the projector wall", width=260, command=lambda: webbrowser.open(self.crack_url_text + "/wall")).grid(row=2, column=1, sticky="w", pady=(8, 4))
+        self.crack_gpu_btn = ctk.CTkButton(self.crack_live_row, text="➕ Add this laptop's GPU as a cracker", width=260, fg_color="transparent", border_width=2, command=self.toggle_crack_gpu)
+        self.crack_gpu_btn.grid(row=3, column=1, sticky="w", pady=4)
+        self.crack_cpu_btn = ctk.CTkButton(self.crack_live_row, text="➕ Add a CPU-only cracker (to compare)", width=260, fg_color="transparent", border_width=2, command=self.toggle_crack_cpu)
+        self.crack_cpu_btn.grid(row=4, column=1, sticky="w", pady=4)
+        self.crack_stop_btn = ctk.CTkButton(f, text="Stop", height=36, width=320, fg_color="#E22134", hover_color="#B01625", command=self.stop_crack)
+        self.crack_log = ctk.CTkTextbox(f, height=120, width=660, font=ctk.CTkFont(family="Consolas", size=11), wrap="word")
+
+    def start_crack(self):
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONWARNINGS"] = "ignore"
+        self.crack_proc = subprocess.Popen([self._pool_python(), "-u", "nexus_crack.py", "--port", str(self.CRACK_PORT)],
+                                           cwd=self.POOL_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                           encoding="utf-8", errors="replace", env=env, creationflags=self._pool_creationflags())
+        threading.Thread(target=self._crack_read_log, args=(self.crack_proc,), daemon=True).start()
+        self.crack_url_text = f"http://{self.get_lan_ip()}:{self.CRACK_PORT}"
+        self.crack_start_btn.pack_forget()
+        self.crack_status.configure(text="⏳ Starting…", text_color="#f39c12")
+        try:
+            import qrcode
+            qr = qrcode.make(self.crack_url_text, box_size=8, border=2)
+            img = (qr.get_image() if hasattr(qr, "get_image") else qr._img).convert("RGB")
+            self.crack_qr_img = ctk.CTkImage(light_image=img, dark_image=img, size=(190, 190))
+            self.crack_qr.configure(image=self.crack_qr_img, text="")
+        except Exception:
+            self.crack_qr.configure(text="(pip install qrcode)")
+        self.crack_url.configure(text=self.crack_url_text)
+        self.crack_live_row.pack(pady=6)
+        self.crack_stop_btn.pack(pady=4)
+        self.crack_log.delete("1.0", "end")
+        self.crack_log.pack(pady=6)
+
+    def _crack_read_log(self, proc):
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line or "Warning" in line or line.startswith("="):
+                continue
+            if "PASSWORD STRENGTH LAB" in line:
+                self.after(0, lambda: (self.crack_status.configure(text="🟢 Live — open the projector wall, then ask everyone to scan the QR code", text_color="#1DB954"),
+                                       webbrowser.open(self.crack_url_text + "/wall")))
+            line = line.replace("[crack] ", "")
+            self.after(0, lambda l=line: (self.crack_log.insert("end", time.strftime("%H:%M:%S  ") + l.strip() + "\n"), self.crack_log.see("end")))
+
+    def toggle_crack_gpu(self):
+        if self.crack_gpu_proc and self.crack_gpu_proc.poll() is None:
+            self._pool_kill(self.crack_gpu_proc)
+            self.crack_gpu_proc = None
+            self.crack_gpu_btn.configure(text="➕ Add this laptop's GPU as a cracker", fg_color="transparent")
+            return
+        self.crack_gpu_proc = self._browser_worker(self.CRACK_PORT, "Host laptop GPU", "laptop", self.GPU_WORKER_FLAGS, self.crack_status)
+        if self.crack_gpu_proc:
+            self.crack_gpu_btn.configure(text="■ Remove this laptop's GPU", fg_color="#3b3312")
+
+    def toggle_crack_cpu(self):
+        if self.crack_cpu_proc and self.crack_cpu_proc.poll() is None:
+            self._pool_kill(self.crack_cpu_proc)
+            self.crack_cpu_proc = None
+            self.crack_cpu_btn.configure(text="➕ Add a CPU-only cracker (to compare)", fg_color="transparent")
+            return
+        self.crack_cpu_proc = self._browser_worker(self.CRACK_PORT, "Laptop CPU (no GPU)", "cpu", self.CPU_WORKER_FLAGS, self.crack_status)
+        if self.crack_cpu_proc:
+            self.crack_cpu_btn.configure(text="■ Remove the CPU-only cracker", fg_color="#3b3312")
+
+    def stop_crack(self):
+        for name in ('crack_gpu_proc', 'crack_cpu_proc', 'crack_proc'):
+            self._pool_kill(getattr(self, name, None))
+            setattr(self, name, None)
+        self.crack_gpu_btn.configure(text="➕ Add this laptop's GPU as a cracker", fg_color="transparent")
+        self.crack_cpu_btn.configure(text="➕ Add a CPU-only cracker (to compare)", fg_color="transparent")
+        for w in (self.crack_live_row, self.crack_stop_btn, self.crack_log):
+            w.pack_forget()
+        self.crack_start_btn.pack(pady=6)
+        self.crack_status.configure(text="Ready.", text_color="gray60")
+
     def on_closing(self):
-        for name in ('game_proc', 'pool_proc'):
+        for name in ('game_proc', 'pool_proc', 'arena_proc', 'captions_proc', 'speaker_proc', 'em_proc',
+                     'swarm_gpu_proc', 'swarm_cpu_proc', 'swarm_proc',
+                     'fed_gpu_proc', 'fed_cpu_proc', 'fed_proc',
+                     'crack_gpu_proc', 'crack_cpu_proc', 'crack_proc'):
             try:
                 self._pool_kill(getattr(self, name, None))
             except Exception:

@@ -20,3 +20,6 @@ NEW/dist/
 *.pt
 *.pth
 *.onnx
+
+# Room Supercomputer renders (large images / movies)
+NEW/swarm_output/

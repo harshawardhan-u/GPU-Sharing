@@ -6,7 +6,13 @@ Pillow
 numpy
 pygame
 websockets
-# For the GPU Pool (pool_compute.py / pool_swarm.py), any GPU vendor:
+# For the GPU Pool (pool_compute.py / pool_swarm.py) and Live Arena, any GPU vendor:
 pyopencl
+# QR codes (Live Arena, Live Captions):
+qrcode
+# Live Captions: microphone on the speaker's laptop; Whisper on the GPU laptop.
+# Whisper downloads its model (~1.5 GB) into ../models/whisper on first use.
+sounddevice
+openai-whisper
 # On the GPU laptop only, for real_time_compute.py --serve:
 #   torch  (with a +cuXXX build, e.g. pip install torch --index-url https://download.pytorch.org/whl/cu121)

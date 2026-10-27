@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07080d">
+<title>Room Supercomputer</title>
+<style>
+  :root { --bg: #07080d; --card: #12141e; --line: #23273a; --ink: #f2f1ee; --ink2: #9aa0b4; --me: #4F8EF7;
+          --good: #3CC488; --bad: #F0645A; --warn: #F2C744; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+               font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { min-height: 100vh; padding: max(14px, env(safe-area-inset-top)) 16px 28px; max-width: 520px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 2px; color: var(--ink2);
+           text-transform: uppercase; font-weight: 700; }
+  header i { width: 8px; height: 8px; border-radius: 50%; background: var(--ink2); }
+  header i.on { background: var(--good); box-shadow: 0 0 10px var(--good); }
+  h1 { font-size: 30px; line-height: 1.1; margin: 22px 0 10px; }
+  p { color: var(--ink2); font-size: 15.5px; line-height: 1.5; margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; margin: 12px 0; }
+  .gpu { display: flex; align-items: center; gap: 12px; }
+  .gpu .chip { width: 42px; height: 42px; border-radius: 12px; background: #1d2133; display: grid; place-items: center; font-size: 22px; flex: none; }
+  .gpu b { display: block; font-size: 15.5px; }
+  .gpu span { font-size: 13px; color: var(--ink2); }
+  input { width: 100%; font-size: 17px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line);
+          background: #0d0f17; color: var(--ink); outline: none; }
+  input:focus { border-color: var(--me); }
+  button { width: 100%; font-size: 18px; font-weight: 700; padding: 16px; border-radius: 16px; border: 0; margin-top: 12px;
+           background: linear-gradient(135deg, #4F8EF7, #7a5cf5); color: white; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  small { display: block; color: var(--ink2); font-size: 12.5px; text-align: center; margin-top: 12px; line-height: 1.5; }
+  .hide { display: none !important; }
+  .me { display: flex; align-items: center; gap: 10px; margin: 18px 0 6px; }
+  .me .dot { width: 18px; height: 18px; border-radius: 50%; background: var(--me); box-shadow: 0 0 14px var(--me); flex: none; }
+  .me b { font-size: 22px; }
+  .badge { margin-left: auto; font-size: 12px; font-weight: 700; padding: 5px 9px; border-radius: 999px; background: #3a1d1d; color: #ffb3ab; }
+  #statusline { font-size: 15px; color: var(--ink2); min-height: 22px; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; }
+  .stat span { display: block; font-size: 11.5px; color: var(--ink2); text-transform: uppercase; letter-spacing: .6px; }
+  .stat b { font-size: 24px; font-variant-numeric: tabular-nums; }
+  .two { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 10px; align-items: start; }
+  .frame { border-radius: 14px; overflow: hidden; border: 2px solid var(--me); background: #000; aspect-ratio: 1; }
+  .frame canvas { width: 100%; height: 100%; display: block; image-rendering: auto; }
+  .whole { border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: #000; aspect-ratio: 16/9; }
+  .whole img { width: 100%; height: 100%; display: block; object-fit: cover; }
+  .cap { font-size: 12px; color: var(--ink2); margin-top: 6px; }
+  .bar { height: 8px; border-radius: 4px; background: #1d2133; overflow: hidden; margin-top: 8px; }
+  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #4F8EF7, #3CC488); transition: width .4s; }
+  .hint { text-align: center; font-size: 13px; color: var(--warn); margin-top: 16px; }
+  .big { font-size: 46px; font-weight: 800; line-height: 1; margin: 6px 0; }
+  .center { text-align: center; }
+  a.btn { display: block; text-align: center; text-decoration: none; font-size: 17px; font-weight: 700; padding: 15px;
+          border-radius: 16px; background: #1d2133; color: var(--ink); margin-top: 12px; }
+  .err { color: #ffb3ab; }
+  video { position: fixed; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; }
+</style>
+</head>
+<body>
+<header><i id="led"></i>Room Supercomputer</header>
+
+<section id="join">
+  <h1>Lend your GPU 🙌</h1>
+  <p>Your phone will draw a few squares of one giant 3D picture, together with everyone in this room.
+     It takes about a minute.</p>
+  <div class="card gpu"><div class="chip">🧠</div><div><b id="gpuName">Checking your GPU…</b><span id="gpuMaker"></span></div></div>
+  <input id="name" maxlength="24" placeholder="Your name (optional)" autocomplete="off">
+  <button id="joinBtn" disabled>Join the supercomputer</button>
+  <small>Nothing is installed. Your phone only draws squares and sends them back.<br>Please keep this screen on while it works.</small>
+</section>
+
+<section id="work" class="hide">
+  <div class="me"><span class="dot"></span><b id="myName">You</b><span id="cheatBadge" class="badge hide">😈 Cheat mode (demo)</span></div>
+  <div id="statusline">Connecting…</div>
+  <div class="stats">
+    <div class="stat"><span>Squares</span><b id="sDone">0</b></div>
+    <div class="stat"><span>Your share</span><b id="sShare">0%</b></div>
+    <div class="stat"><span>Speed</span><b id="sRate">–</b></div>
+  </div>
+  <div class="two">
+    <div><div class="frame"><canvas id="out" width="128" height="128"></canvas></div><div class="cap">Square you just drew</div></div>
+    <div><div class="whole"><img id="thumb" alt=""></div>
+      <div class="bar"><i id="prog"></i></div><div class="cap" id="progTxt">The whole picture</div></div>
+  </div>
+  <p class="hint">Keep this screen on until the picture is finished.</p>
+</section>
+
+<section id="done" class="hide center">
+  <h1>Picture finished 🎉</h1>
+  <div class="whole"><img id="dThumb" alt=""></div>
+  <div class="card">
+    <div class="cap">You drew</div><div class="big" id="dSquares">0</div><div class="cap" id="dShare"></div>
+  </div>
+  <div class="card"><div class="cap">Time taken by the whole room</div><div class="big" id="dRoom">0:00</div>
+    <div class="cap" id="dAlone"></div></div>
+  <a class="btn" id="dLink" href="/result_small.jpg" target="_blank">See the picture you helped make</a>
+  <small>Stay on this page — the host may start another one.</small>
+</section>
+
+<section id="banned" class="hide center">
+  <h1 class="err">Removed from the supercomputer</h1>
+  <p id="banReason">Your device sent pixels that did not match the host's check.</p>
+  <p>This is the cheat-detection demo: the host re-computes a few random pixels of the squares each device sends.
+     Wrong pixels mean the squares are thrown away and drawn again by honest devices.</p>
+</section>
+
+<section id="fail" class="hide">
+  <h1 class="err">This browser can't lend its GPU</h1>
+  <p id="failMsg"></p>
+  <p>Try Chrome or Safari (updated), or another device.</p>
+</section>
+
+<video id="awake" src="/keepawake.mp4" muted playsinline loop></video>
+<script src="/swarm_render.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const qs = new URLSearchParams(location.search);
+let R = null, ws = null, me = null, frames = {}, jobId = null, work = [], busy = false, lazy = qs.get("cheat") === "1";
+let joined = false, finished = false, sceneHash = "";
+function fnv(s) {          // same hash as the host's scene_hash(): an old copy of the scene reloads itself
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0;
+  return h.toString(16).padStart(8, "0");
+}
+const out = $("out"), octx = out.getContext("2d");
+
+function show(id) {
+  for (const s of ["join", "work", "done", "banned", "fail"]) $(s).classList.toggle("hide", s !== id);
+}
+function kindOf(maker) {
+  if (qs.get("kind")) return qs.get("kind");
+  if (maker === "CPU only") return "cpu";
+  const ua = navigator.userAgent;
+  if (/iPad|Tablet/.test(ua) || (/Android/.test(ua) && !/Mobile/.test(ua))) return "tablet";
+  if (/iPhone|Android|Mobi/.test(ua)) return "phone";
+  return "laptop";
+}
+function fmt(sec) {
+  sec = Math.max(0, Math.round(sec));
+  return sec >= 3600 ? `${Math.floor(sec / 3600)} h ${Math.floor(sec / 60) % 60} min`
+       : sec >= 60 ? `${Math.floor(sec / 60)} min ${sec % 60} s` : `${sec} s`;
+}
+function status(t) { $("statusline").textContent = t; }
+
+async function init() {
+  try {
+    const src = await (await fetch("/swarm_scene.glsl", { cache: "no-store" })).text();
+    sceneHash = fnv(src.replace(/\r\n/g, "\n"));
+    R = new SwarmRenderer(src);
+  } catch (e) {
+    $("failMsg").textContent = String(e.message || e);
+    show("fail");
+    return;
+  }
+  R.maker = gpuMaker(R.gpu, R.vendor);
+  R.short = gpuShortName(R.gpu);
+  $("gpuName").textContent = R.short;
+  $("gpuMaker").textContent = R.maker === "CPU only" ? "No GPU found — this will use the CPU" : `Made by ${R.maker}`;
+  try { $("name").value = qs.get("name") || localStorage.getItem("swarmName") || ""; } catch (e) {}
+  $("joinBtn").disabled = false;
+  if (qs.get("auto") === "1") join();
+}
+
+async function keepAwake() {
+  try { await $("awake").play(); } catch (e) {}
+  try { if (navigator.wakeLock) await navigator.wakeLock.request("screen"); } catch (e) {}
+}
+
+function join() {
+  joined = true;
+  keepAwake();
+  try { localStorage.setItem("swarmName", $("name").value.trim()); } catch (e) {}
+  show("work");
+  connect();
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    $("led").classList.add("on");
+    ws.send(JSON.stringify({ role: "worker", name: $("name").value.trim(), gpu: R.short, maker: R.maker,
+                             kind: kindOf(R.maker) }));
+  };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data !== "string") {
+      const b = new Uint8Array(ev.data);
+      if (b[0] === 84) {                          // "T" + JPEG: thumbnail of the whole picture
+        const url = URL.createObjectURL(new Blob([b.subarray(1)], { type: "image/jpeg" }));
+        const img = $("thumb"), old = img.src;
+        img.src = url;
+        if (old.startsWith("blob:")) setTimeout(() => URL.revokeObjectURL(old), 2000);
+      }
+      return;
+    }
+    const m = JSON.parse(ev.data);
+    if (m.t === "welcome") {
+      if (m.scene && m.scene !== sceneHash) {       // the host has a newer scene: reload and rejoin
+        joined = false;
+        const u = new URL(location.href);
+        u.searchParams.set("auto", "1");
+        u.searchParams.set("name", $("name").value.trim());
+        location.replace(u.toString());
+        return;
+      }
+      me = m;
+      document.documentElement.style.setProperty("--me", m.color);
+      $("myName").textContent = m.name;
+      status("Measuring your GPU…");
+      setTimeout(() => {
+        const ms = R.render(m.calib.fp, m.calib.tile);      // first run includes shader compile
+        const ms2 = R.render(m.calib.fp, m.calib.tile);
+        octx.drawImage(R.canvas, 0, 0, 128, 128);
+        ws.send(JSON.stringify({ t: "calib", ms: Math.min(ms, ms2) }));
+        status(`Ready! Your GPU drew a test square in ${Math.min(ms, ms2).toFixed(0)} ms. Waiting for the host to start…`);
+      }, 50);
+    } else if (m.t === "job") {
+      jobId = m.job;
+      frames[m.job] = m.frames;
+      finished = false;
+      if (!$("work").classList.contains("hide") || !$("done").classList.contains("hide")) show("work");
+      status(`Drawing: ${m.title}`);
+    } else if (m.t === "work") {
+      work.push(m);
+      pump();
+    } else if (m.t === "me") {
+      $("sDone").textContent = m.done;
+      $("sShare").textContent = `${m.share}%`;
+      $("sRate").textContent = m.rate ? `${m.rate.toFixed(1)}/s` : "–";
+      $("prog").style.width = `${(m.progress * 100).toFixed(1)}%`;
+      if (jobId && !finished) $("progTxt").textContent =
+        `Whole picture: ${(m.progress * 100).toFixed(0)}% · ${m.devices} devices` + (m.eta ? ` · ${fmt(m.eta)} left` : "");
+    } else if (m.t === "cheat") {
+      lazy = m.on;
+      $("cheatBadge").classList.toggle("hide", !lazy);
+    } else if (m.t === "done") {
+      finished = true;
+      work = [];
+      $("dSquares").textContent = m.mine ? m.mine.done : 0;
+      $("dShare").textContent = m.mine ? `squares — ${m.mine.share}% of the picture` : "squares this time";
+      $("dRoom").textContent = fmt(m.elapsed);
+      $("dAlone").textContent = m.mine ? `Your device alone would need about ${fmt(m.mine.alone)}` : "";
+      $("dThumb").src = $("thumb").src;
+      $("dLink").href = m.kind === "movie" ? "/result.mp4" : "/result_small.jpg";
+      $("dLink").textContent = m.kind === "movie" ? "Watch the movie you helped make" : "See the picture you helped make";
+      show("done");
+    } else if (m.t === "idle") {
+      jobId = null; work = []; finished = false;
+      show("work");
+      $("sDone").textContent = "0"; $("sShare").textContent = "0%"; $("prog").style.width = "0";
+      status("Ready. Waiting for the host to start…");
+    } else if (m.t === "banned") {
+      work = [];
+      $("banReason").textContent = m.reason;
+      show("banned");
+      ws.onclose = null;
+      ws.close();
+    }
+  };
+  ws.onclose = () => {
+    $("led").classList.remove("on");
+    work = [];
+    if (!joined) return;
+    status("Connection lost — reconnecting…");
+    setTimeout(connect, 2000);
+  };
+}
+
+// Squares are drawn on the GPU one after another; JPEG compression and sending
+// happen in the background, so the GPU starts the next square straight away.
+const enc = [0, 1, 2, 3].map(() => document.createElement("canvas"));
+let encN = 0;
+async function pump() {
+  if (busy) return;
+  busy = true;
+  const pending = [];
+  while ((work.length || pending.length) && ws && ws.readyState === 1) {
+    if (work.length && pending.length < 3) {
+      const w = work.shift();
+      const fps = frames[w.job];
+      if (!fps || w.job !== jobId) continue;
+      const ms = R.render(fps[w.key[0]], w.tile, lazy);
+      const [, , tw, th] = w.tile;
+      const c = enc[encN++ % enc.length];
+      if (c.width !== tw || c.height !== th) { c.width = tw; c.height = th; }
+      c.getContext("2d").drawImage(R.canvas, 0, 0);
+      pending.push({ w, ms, c, blob: new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.92)) });
+      continue;
+    }
+    const p = pending.shift();
+    const blob = await p.blob;
+    const head = new TextEncoder().encode(JSON.stringify({ job: p.w.job, key: p.w.key, ms: Math.round(p.ms * 10) / 10 }));
+    const buf = new Uint8Array(2 + head.length + blob.size);
+    new DataView(buf.buffer).setUint16(0, head.length, true);
+    buf.set(head, 2);
+    buf.set(new Uint8Array(await blob.arrayBuffer()), 2 + head.length);
+    if (ws.readyState === 1 && p.w.job === jobId) ws.send(buf);
+    if (out.width !== p.c.width || out.height !== p.c.height) { out.width = p.c.width; out.height = p.c.height; }
+    octx.drawImage(p.c, 0, 0);
+    status(lazy ? "😈 Cheating: skipping most of the work…" : `Drawing squares… last one took ${p.ms.toFixed(0)} ms on your GPU`);
+  }
+  busy = false;
+}
+
+$("joinBtn").onclick = join;
+init();
+</script>
+</body>
+</html>

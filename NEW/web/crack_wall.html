@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Password Strength Lab — Wall</title>
+<style>
+  :root { --bg: #06070c; --panel: #0f1119; --panel2: #151826; --line: #22263a; --ink: #f3f2ef; --ink2: #9aa0b4;
+          --ink3: #6b7189; --accent: #F2C744; --good: #3CC488; --bad: #F0645A; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  header { display: flex; align-items: center; gap: 18px; padding: 1.4vh 1.6vw; border-bottom: 1px solid var(--line); }
+  .logo { width: 4.6vh; height: 4.6vh; border-radius: 1.2vh; flex: none; display: grid; place-items: center; font-size: 2.6vh;
+          background: conic-gradient(from 210deg, #F2C744, #F58A3D, #F0645A, #E85FA0, #A57BF5, #F2C744); box-shadow: 0 0 2.2vh rgba(242, 199, 68, .3); }
+  h1 { margin: 0; font-size: 2.7vh; letter-spacing: .3vh; font-weight: 800; }
+  h1 span { background: linear-gradient(90deg, #ffd45e, #ff9a4d, #ff7a6b); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header p { margin: .3vh 0 0; font-size: 1.6vh; color: var(--ink2); }
+  .ctl { margin-left: auto; display: flex; gap: .6vw; align-items: center; }
+  .ctl label { font-size: 1.4vh; color: var(--ink2); }
+  .ctl select, .ctl button { font: inherit; font-size: 1.55vh; padding: .9vh 1.1vw; border-radius: 1vh; border: 1px solid var(--line); background: var(--panel2); color: var(--ink); cursor: pointer; }
+  .ctl input { font: inherit; font-size: 1.7vh; padding: .9vh 1vw; border-radius: 1vh; border: 1px solid var(--line); background: #0d0f17; color: var(--ink); width: 15vw; outline: none; font-family: "Courier New", monospace; }
+  .ctl input:focus { border-color: var(--accent); }
+  .ctl button.primary { background: linear-gradient(135deg, #F2C744, #F58A3D); border: 0; font-weight: 700; color: #1a1407; padding: .9vh 1.6vw; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 29vw; min-height: 0; }
+  .stage { position: relative; padding: 1.8vh 1.6vw; min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 1.6vh; }
+  /* live cracking view */
+  .live { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 2vh; }
+  .ratebox { text-align: center; }
+  .ratebox .lbl { font-size: 2.2vh; color: var(--ink2); }
+  .ratebox .rate { font-size: 11vh; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums;
+                   background: linear-gradient(90deg, #ffd45e, #ff9a4d); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .ratebox .unit { font-size: 3vh; color: var(--ink2); font-weight: 700; }
+  .target { text-align: center; font-size: 2vh; color: var(--ink2); }
+  .target .dots { font-size: 7vh; letter-spacing: 1.2vh; color: var(--ink); font-weight: 800; font-family: "Courier New", monospace; }
+  .target .dots .rev { color: var(--good); }
+  .progwrap { margin: 0 6vw; }
+  .progbar { height: 2.4vh; border-radius: 1.2vh; background: var(--panel2); overflow: hidden; border: 1px solid var(--line); }
+  .progbar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #F2C744, #F58A3D); transition: width .3s; }
+  .progmeta { display: flex; justify-content: space-between; font-size: 1.6vh; color: var(--ink2); margin-top: .8vh; }
+  .statrow { display: flex; gap: 1vw; }
+  .statbox { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 1.2vh; padding: 1.2vh 1vw; text-align: center; }
+  .statbox span { display: block; font-size: 1.4vh; color: var(--ink2); } .statbox b { font-size: 3vh; font-variant-numeric: tabular-nums; }
+  /* intro */
+  .intro { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+  .intro h2 { margin: 0 0 1vh; font-size: 3.4vh; } .intro .lead { font-size: 2vh; color: var(--ink2); margin: 0 0 3vh; max-width: 60vw; line-height: 1.5; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.2vw; }
+  .step { background: var(--panel); border: 1px solid var(--line); border-radius: 1.4vh; padding: 2vh 1.2vw; }
+  .step .n { width: 4vh; height: 4vh; border-radius: 50%; display: grid; place-items: center; font-weight: 800; background: #3a2f12; color: #ffd45e; font-size: 1.9vh; margin-bottom: 1.2vh; }
+  .step b { display: block; font-size: 2vh; margin-bottom: .6vh; } .step span { font-size: 1.6vh; color: var(--ink2); line-height: 1.4; }
+  .pick { margin-top: 2.6vh; font-size: 2vh; } .pick b { color: var(--accent); }
+  /* result */
+  .result { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 1.6vh; }
+  .cracked { text-align: center; }
+  .cracked .word { font-size: 9vh; font-weight: 800; font-family: "Courier New", monospace; color: var(--good); letter-spacing: .6vh; }
+  .cracked .sub { font-size: 2.1vh; color: var(--ink2); margin-top: 1vh; }
+  .cracked .sub b { color: var(--ink); }
+  .tbl { background: var(--panel); border: 1px solid var(--line); border-radius: 1.4vh; padding: 1.4vh 1.4vw; }
+  .tbl h3 { margin: 0 0 1vh; font-size: 2vh; } .tbl h3 small { color: var(--ink2); font-weight: 400; font-size: 1.5vh; }
+  .trow { display: grid; grid-template-columns: 22vw 1fr auto; align-items: center; gap: 1vw; padding: .7vh 0; border-top: 1px solid var(--line); }
+  .trow:first-of-type { border-top: 0; }
+  .trow .pw { font-size: 1.8vh; } .trow .bar { height: 1.4vh; border-radius: .7vh; background: var(--panel2); overflow: hidden; }
+  .trow .bar i { display: block; height: 100%; border-radius: .7vh; }
+  .trow .tm { font-size: 1.9vh; font-weight: 700; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .foot { font-size: 1.45vh; color: var(--ink3); margin-top: 1vh; line-height: 1.5; }
+  aside { border-left: 1px solid var(--line); padding: 1.6vh 1.2vw; display: flex; flex-direction: column; gap: 1.3vh; min-height: 0; }
+  .join { display: flex; gap: 1vw; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 1.4vh; padding: 1.2vh; }
+  .join img { width: 14vh; height: 14vh; border-radius: .8vh; background: #fff; flex: none; }
+  .join b { display: block; font-size: 2.3vh; } .join .url { font-size: 1.7vh; color: #ffd45e; font-weight: 700; word-break: break-all; margin: .5vh 0; } .join small { font-size: 1.4vh; color: var(--ink2); }
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: .8vh .6vw; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 1.2vh; padding: 1vh .9vw; }
+  .kpi span { display: block; font-size: 1.35vh; color: var(--ink2); text-transform: uppercase; letter-spacing: .08vh; } .kpi b { font-size: 3vh; font-variant-numeric: tabular-nums; }
+  .kpi.wide { grid-column: span 2; }
+  .makers { display: flex; flex-wrap: wrap; gap: .4vh; margin-top: .3vh; } .makers i { font-style: normal; font-size: 1.2vh; padding: .2vh .5vw; border-radius: 99px; background: var(--panel2); color: var(--ink2); }
+  .devs { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: .5vh; }
+  .devs h3, .events h3 { margin: 0; font-size: 1.4vh; color: var(--ink3); text-transform: uppercase; letter-spacing: .12vh; }
+  .dev { position: relative; display: grid; grid-template-columns: .9vh 1fr auto; gap: .3vh .6vw; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: .9vh; padding: .6vh .7vw; }
+  .dev .sw { width: .9vh; height: 100%; border-radius: .5vh; grid-row: span 2; }
+  .dev .nm { font-size: 1.6vh; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dev .gp { font-size: 1.2vh; color: var(--ink2); font-weight: 400; margin-left: .4vw; }
+  .dev .ct { font-size: 1.7vh; font-weight: 800; text-align: right; font-variant-numeric: tabular-nums; }
+  .dev .rb { grid-column: 2 / 4; height: .45vh; background: var(--panel2); border-radius: .3vh; overflow: hidden; }
+  .dev .rb i { display: block; height: 100%; }
+  .chip { font-size: 1.15vh; font-weight: 700; padding: .12vh .5vw; border-radius: 99px; margin-left: .4vw; }
+  .chip.cracking { background: #3a2f12; color: #ffd45e; } .chip.idle { background: #1b2033; color: #aab3d1; } .chip.left { background: #222; color: #888; }
+  .events { height: 15vh; flex: none; overflow: hidden; display: flex; flex-direction: column; gap: .35vh; }
+  .ev { font-size: 1.4vh; color: var(--ink2); line-height: 1.35; } .ev.k-done { color: #7fe3b4; font-weight: 700; } .ev.k-start { color: #ffd45e; } .ev.k-join { color: #8fe3b4; }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">🔐</div>
+  <div>
+    <h1>PASSWORD STRENGTH <span>LAB</span></h1>
+    <p>The room's phone GPUs guess a random demo password together — to show what makes a password weak or strong.</p>
+  </div>
+  <div class="ctl">
+    <input id="pwInput" placeholder="Type a password to crack…" maxlength="12" autocomplete="off" spellcheck="false">
+    <button id="crackBtn" class="primary">🔓 Crack this</button>
+    <span style="color:var(--ink3);font-size:1.4vh">or</span>
+    <select id="diff" title="Crack a random password instead"></select>
+    <button id="startBtn">🎲 Random</button>
+    <button id="resetBtn">Reset</button>
+  </div>
+</header>
+<main>
+  <section class="stage">
+    <!-- intro -->
+    <div class="intro" id="intro">
+      <h2>How it works</h2>
+      <p class="lead">Type a password (like <b>a123</b>) and watch the room's phones crack it — or let the laptop make up a random one.
+         Then we see how long a <i>stronger</i> password would have taken.</p>
+      <div class="steps">
+        <div class="step"><div class="n">1</div><b>A secret demo password</b><span>This laptop generates a random one and shares only its scrambled fingerprint (hash).</span></div>
+        <div class="step"><div class="n">2</div><b>Phones guess on their GPUs</b><span>Each phone tries millions of guesses a second and checks each against the fingerprint.</span></div>
+        <div class="step"><div class="n">3</div><b>See what's safe</b><span>A short password falls in seconds. Then see why a longer one would take millions of years.</span></div>
+      </div>
+      <div class="pick" id="pickLine">Pick a difficulty and press <b>Start cracking</b>.</div>
+    </div>
+    <!-- live -->
+    <div class="live hide" id="live">
+      <div class="ratebox"><div class="lbl">The room is guessing at</div><div class="rate" id="rate">0</div><div class="unit" id="rateUnit">guesses per second</div></div>
+      <div class="target"><div>Cracking <span id="diffLabel"></span></div><div class="dots" id="dots">••••••</div></div>
+      <div class="progwrap">
+        <div class="progbar"><i id="prog"></i></div>
+        <div class="progmeta"><span id="triedTxt">0 tried</span><span id="totalTxt">0 possible</span></div>
+      </div>
+      <div class="statrow">
+        <div class="statbox"><span>Devices guessing</span><b id="lDev">0</b></div>
+        <div class="statbox"><span>Total guesses</span><b id="lGuess">0</b></div>
+        <div class="statbox"><span>Time</span><b id="lTime">0.0s</b></div>
+      </div>
+    </div>
+    <!-- result -->
+    <div class="result hide" id="result">
+      <div class="cracked">
+        <div style="font-size:2.2vh;color:var(--ink2)" id="crackHead">The room cracked the password</div>
+        <div class="word" id="word">?????</div>
+        <div class="sub" id="crackSub"></div>
+      </div>
+      <div class="tbl">
+        <h3>How long would the room need to crack… <small id="tblRate"></small></h3>
+        <div id="tblRows"></div>
+        <div class="foot">Estimated at the room's measured speed. Real sites also slow attackers down with “salted”, deliberately-slow hashing — this demo uses a plain fast hash to show the idea. Takeaway: <b>length and variety beat everything.</b></div>
+      </div>
+    </div>
+  </section>
+  <aside>
+    <div class="join">
+      <img src="/qr.png" alt="QR code">
+      <div><b>Scan to join</b><div class="url" id="url"></div><small>Same Wi-Fi · opens in the browser · no app</small></div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><span>Devices</span><b id="kDev">0</b></div>
+      <div class="kpi"><span>GPU makers</span><b id="kMak">0</b><div class="makers" id="kMakers"></div></div>
+      <div class="kpi wide"><span>Pooled guess speed</span><b id="kRate" style="color:#ffd45e">—</b></div>
+    </div>
+    <div class="devs" id="devs"><h3>Devices in the room</h3></div>
+    <div class="events" id="events"><h3>What's happening</h3></div>
+  </aside>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let ws, S = null, canControl = true;
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+function fmtBig(n) { return n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : Math.round(n).toLocaleString(); }
+function fmtRate(r) { if (!r) return ["0", "guesses per second"]; if (r >= 1e9) return [(r / 1e9).toFixed(2), "billion guesses / second"]; if (r >= 1e6) return [(r / 1e6).toFixed(0), "million guesses / second"]; return [Math.round(r).toLocaleString(), "guesses / second"]; }
+function human(sec) {
+  if (!isFinite(sec)) return "—";
+  if (sec < 1) return "under a second";
+  const u = [["year", 31557600], ["day", 86400], ["hour", 3600], ["minute", 60], ["second", 1]];
+  if (sec < 31557600) { for (const [n, s] of u) if (sec >= s) { const v = sec / s; return v.toFixed(v < 10 ? 1 : 0) + " " + n + (Math.round(v) === 1 ? "" : "s"); } }
+  const yrs = sec / 31557600;
+  if (yrs > 1.38e10) return "longer than the universe has existed";
+  if (yrs < 1e3) return Math.round(yrs).toLocaleString() + " years";
+  if (yrs < 1e6) return (yrs / 1e3).toFixed(0) + " thousand years";
+  if (yrs < 1e9) return (yrs / 1e6).toFixed(1) + " million years";
+  return (yrs / 1e9).toFixed(1) + " billion years";
+}
+
+function render() {
+  if (!S) return;
+  $("url").textContent = S.url;
+  $("kDev").textContent = S.active;
+  $("kMak").textContent = S.makers.length;
+  $("kMakers").innerHTML = S.makers.map((m) => `<i>${esc(m)}</i>`).join("");
+  const [rv, ru] = fmtRate(S.rate);
+  $("kRate").textContent = S.rate >= 1e6 ? `${rv} ${ru.includes("billion") ? "B/s" : "M/s"}` : rv + "/s";
+  if (S.difficulties && $("diff").options.length !== S.difficulties.length) {
+    $("diff").innerHTML = S.difficulties.map((d) => `<option value="${d.key}">${esc(d.label)}</option>`).join("");
+    $("diff").value = S.diff;
+  }
+  if (document.activeElement !== $("diff")) $("diff").value = S.diff;
+  $("intro").classList.toggle("hide", S.phase !== "idle");
+  $("live").classList.toggle("hide", S.phase !== "cracking");
+  $("result").classList.toggle("hide", S.phase !== "done");
+  $("pickLine").innerHTML = S.active ? `<b>${S.active}</b> device(s) ready · chosen: <b>${esc(S.diff_label)}</b> (${fmtKeyspace(S)} possible) · press <b>Start cracking</b>` : "Pick a difficulty and press <b>Start cracking</b>.";
+  if (S.phase === "cracking") renderLive();
+  if (S.phase === "done") renderResult();
+  // devices
+  const devs = [...S.devices].sort((a, b) => (b.guesses - a.guesses) || (a.id - b.id));
+  const maxR = Math.max(1, ...devs.map((d) => d.rate));
+  const room = Math.max(3, Math.floor(($("devs").clientHeight - 18) / (innerHeight * 0.056)));
+  $("devs").innerHTML = "<h3>Devices in the room</h3>" + devs.slice(0, room).map((d) => `
+    <div class="dev ${d.status}">
+      <div class="sw" style="background:${d.color}"></div>
+      <div class="nm">${esc(d.name)}<span class="chip ${d.status}">${d.status === "cracking" ? "guessing" : d.status}</span><span class="gp">${esc(d.gpu)}</span></div>
+      <div class="ct">${d.rate ? fmtBig(d.rate) + "/s" : fmtBig(d.guesses)}</div>
+      <div class="rb"><i style="width:${(100 * d.rate / maxR).toFixed(0)}%;background:${d.color}"></i></div>
+    </div>`).join("") + (devs.length > room ? `<div class="ev">+ ${devs.length - room} more</div>` : "");
+  const icon = { join: "🟢", start: "🚀", done: "🔓", info: "•" };
+  $("events").innerHTML = "<h3>What's happening</h3>" + S.events.slice(0, 5).map((e) => `<div class="ev k-${e.kind}">${icon[e.kind] || "•"} ${esc(e.text)}</div>`).join("");
+  $("startBtn").textContent = S.phase === "cracking" ? "■ Cracking…" : "🎲 Random";
+  $("startBtn").disabled = S.phase === "cracking";
+  $("crackBtn").disabled = S.phase === "cracking";
+}
+function fmtKeyspace(S) { const n = Math.pow(S.charset_size, S.length); return n >= 1e6 ? (n / 1e6).toFixed(n < 1e8 ? 1 : 0) + " million" : Math.round(n).toLocaleString(); }
+
+function renderLive() {
+  const [rv, ru] = fmtRate(S.rate);
+  $("rate").textContent = rv; $("rateUnit").textContent = ru;
+  $("diffLabel").textContent = S.diff_label;
+  $("dots").textContent = "•".repeat(S.length);
+  $("prog").style.width = `${Math.min(100, S.progress * 100).toFixed(1)}%`;
+  $("triedTxt").textContent = `${fmtBig(S.guesses)} tried (${(S.progress * 100).toFixed(1)}%)`;
+  $("totalTxt").textContent = `${S.total.toLocaleString()} possible`;
+  $("lDev").textContent = S.active; $("lGuess").textContent = fmtBig(S.guesses); $("lTime").textContent = `${S.elapsed.toFixed(1)}s`;
+}
+const REF_RATE = 1e10;   // a strong attacker (~10 billion guesses/sec) for estimating uncracked passwords
+function renderResult() {
+  $("word").textContent = S.found_pw || "—";
+  const measured = S.elapsed > 0 ? S.guesses / S.elapsed : S.rate;
+  let avg;
+  if (S.too_strong) {
+    $("crackHead").textContent = "Too strong to crack here 🛡️";
+    $("word").style.color = "var(--accent)";
+    avg = measured > 1e6 ? measured : REF_RATE;
+    const n = Math.pow(S.charset_size, S.length), sec = n / avg;
+    $("crackSub").innerHTML = `<b>${esc(S.found_pw)}</b> has <b>${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}</b> possibilities — ` +
+      `about <b>${human(sec)}</b> to brute-force even at ${fmtRate(avg)[0]} ${fmtRate(avg)[1]}. That's exactly what you want.`;
+  } else {
+    $("crackHead").textContent = "The room cracked the password";
+    $("word").style.color = "var(--good)";
+    // the peak pooled rate reflects the room's real speed; a short crack's average is noisy
+    avg = Math.max(S.peak_rate || 0, measured);
+    $("crackSub").innerHTML = `Found by <b>${esc(S.found_by || "the room")}</b> in <b>${S.elapsed < 1 ? "under a second" : S.elapsed.toFixed(1) + " seconds"}</b> after <b>${S.guesses.toLocaleString()}</b> guesses`;
+  }
+  // for a too-fast-to-measure crack, estimate from the devices present (~60M guesses/s each is typical for a phone)
+  if (!avg || avg < 1e6) avg = S.peak_rate > 1e6 ? S.peak_rate : Math.max((S.active || 1) * 60e6, 60e6);
+  const [rv, ru] = fmtRate(avg);
+  $("tblRate").textContent = S.too_strong ? `at ${rv} ${ru}` : `at the room's ${rv} ${ru}`;
+  const maxLog = Math.log10(Math.max(...S.table.map((t) => Math.pow(t.size, t.len) / avg)));
+  $("tblRows").innerHTML = S.table.map((t) => {
+    const n = Math.pow(t.size, t.len), sec = n / avg, frac = Math.max(0.02, Math.min(1, Math.log10(Math.max(1, sec)) / Math.max(1, maxLog)));
+    const col = sec < 60 ? "#F0645A" : sec < 86400 ? "#F2C744" : sec < 31557600 * 100 ? "#9CCC50" : "#3CC488";
+    return `<div class="trow"><div class="pw">${esc(t.label)}</div><div class="bar"><i style="width:${(frac * 100).toFixed(0)}%;background:${col}"></i></div><div class="tm" style="color:${col}">${human(sec)}</div></div>`;
+  }).join("");
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => ws.send(JSON.stringify({ role: "wall" }));
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.t === "hello") { canControl = m.control; document.querySelector(".ctl").style.visibility = canControl ? "" : "hidden"; }
+    else if (m.t === "state") { S = m; render(); }
+    else if (m.t === "cracked") { S = m.state; render(); }
+    else if (m.t === "reset") { /* next state refreshes */ }
+  };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+function crackTyped() {
+  const pw = $("pwInput").value.trim();
+  if (pw) send({ t: "start", pw });
+}
+$("crackBtn").onclick = crackTyped;
+$("pwInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); crackTyped(); } });
+$("startBtn").onclick = () => send({ t: "start", diff: $("diff").value });
+$("resetBtn").onclick = () => send({ t: "reset" });
+$("diff").onchange = () => send({ t: "diff", diff: $("diff").value });
+addEventListener("keydown", (e) => { if ((e.key === "s" || e.key === "S") && e.target.tagName !== "SELECT" && e.target.tagName !== "INPUT") $("startBtn").click(); });
+connect();
+</script>
+</body>
+</html>

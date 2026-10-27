@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>EM Wave Lab</title>
+<style>
+  :root { --bg: #07080d; --panel: #12141e; --line: #23273a; --ink: #f0efec; --ink2: #9aa0b4; --accent: #2a78d6; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
+               font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; touch-action: none; user-select: none; }
+  body { display: grid; grid-template-rows: auto 1fr auto; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 16px; letter-spacing: 1.5px; }
+  header h1 span { color: #00b8d9; }
+  .stat { font-size: 12px; color: var(--ink2); }
+  .stat b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  #wrap { position: relative; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  #view { image-rendering: auto; border: 1px solid var(--line); border-radius: 6px; }
+  .tools { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 12px; border-top: 1px solid var(--line); justify-content: center; align-items: center; }
+  .tools button { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 9px;
+                  padding: 8px 11px; font-size: 13px; cursor: pointer; }
+  .tools button.on { border-color: #00b8d9; color: #00b8d9; }
+  .tools label { font-size: 12px; color: var(--ink2); display: flex; align-items: center; gap: 6px; }
+  .tools input[type=range] { width: 120px; accent-color: #00b8d9; }
+  .sep { width: 1px; height: 26px; background: var(--line); margin: 0 4px; }
+  #legend { position: absolute; right: 14px; bottom: 10px; font-size: 11px; color: var(--ink2); display: flex; align-items: center; gap: 6px; }
+  #legend i { display: inline-block; width: 90px; height: 8px; border-radius: 4px;
+              background: linear-gradient(90deg, #7fd8ff, #2a78d6, #07080d, #eb6834, #ffd27f); }
+</style>
+</head>
+<body>
+<header>
+  <h1>EM <span>WAVE LAB</span></h1>
+  <span class="stat">Solver: <b id="dev">…</b></span>
+  <span class="stat"><b id="sps">0</b> steps/s</span>
+  <span class="stat">max <b id="maxsps">-</b> steps/s</span>
+  <span class="stat"><b id="mcs">0</b> M cell-updates/s</span>
+  <span class="stat">grid <b id="grid">-</b></span>
+  <span class="stat"><b id="viewers">0</b> viewing</span>
+</header>
+<div id="wrap"><canvas id="view"></canvas><div id="legend">−E<i></i>+E</div></div>
+<div class="tools">
+  <button data-mode="source" class="on">📡 Antenna</button>
+  <button data-mode="wall">🧱 Wall</button>
+  <button data-mode="erase">🧽 Erase</button>
+  <span class="sep"></span>
+  <button data-preset="double_slit">Double slit</button>
+  <button data-preset="single_slit">Single slit</button>
+  <button data-preset="reflector">Reflector</button>
+  <button data-preset="waveguide">Waveguide</button>
+  <button data-preset="lens">Lens</button>
+  <button data-preset="antennas">2 antennas</button>
+  <button data-preset="clear">Clear</button>
+  <span class="sep"></span>
+  <label>Frequency <input id="freq" type="range" min="10" max="60" value="20"></label>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const view = $("view"), vctx = view.getContext("2d");
+const off = document.createElement("canvas"), octx = off.getContext("2d");
+let ws, mode = "source", res = 256, sources = [], img = null;
+const wantRes = +(new URLSearchParams(location.search).get("res") || (innerWidth > 900 ? 512 : 256));
+
+const lut = new Uint8ClampedArray(256 * 4);
+(function buildLut() {
+  const neg = [[0x07, 0x08, 0x0d], [0x2a, 0x78, 0xd6], [0x7f, 0xd8, 0xff]];
+  const pos = [[0x07, 0x08, 0x0d], [0xeb, 0x68, 0x34], [0xff, 0xd2, 0x7f]];
+  const ramp = (stops, t) => {
+    const s = Math.min(stops.length - 2, Math.floor(t * (stops.length - 1)));
+    const f = t * (stops.length - 1) - s;
+    return stops[s].map((c, k) => c + (stops[s + 1][k] - c) * f);
+  };
+  for (let v = 0; v < 256; v++) {
+    let c;
+    if (v === 0) c = [0x9a, 0xa0, 0xb4];
+    else if (v < 128) c = ramp(neg, Math.pow((128 - v) / 127, 0.7));
+    else c = ramp(pos, Math.pow((v - 128) / 127, 0.7));
+    lut.set([c[0], c[1], c[2], 255], v * 4);
+  }
+})();
+
+function layout() {
+  const wrap = $("wrap").getBoundingClientRect();
+  const size = Math.floor(Math.min(wrap.width - 16, wrap.height - 16));
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  view.style.width = view.style.height = size + "px";
+  view.width = view.height = size * dpr;
+}
+addEventListener("resize", layout);
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => ws.send(JSON.stringify({ res: wantRes }));
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      const s = JSON.parse(ev.data);
+      $("dev").textContent = s.device; $("sps").textContent = s.steps_per_sec;
+      $("maxsps").textContent = (s.max_steps_per_sec || 0).toLocaleString();
+      $("mcs").textContent = s.mcells_per_sec; $("grid").textContent = `${s.grid}×${s.grid}`;
+      $("viewers").textContent = s.viewers; sources = s.sources;
+      $("freq").value = Math.round(s.freq * 1000);
+      return;
+    }
+    const dv = new DataView(ev.data);
+    res = dv.getUint16(0, true);
+    const field = new Uint8Array(ev.data, 2);
+    if (!img || img.width !== res) { off.width = off.height = res; img = octx.createImageData(res, res); }
+    const px = img.data;
+    for (let i = 0; i < field.length; i++) {
+      const o = field[i] * 4, p = i * 4;
+      px[p] = lut[o]; px[p + 1] = lut[o + 1]; px[p + 2] = lut[o + 2]; px[p + 3] = 255;
+    }
+    octx.putImageData(img, 0, 0);
+    vctx.imageSmoothingEnabled = true;
+    vctx.drawImage(off, 0, 0, view.width, view.height);
+    for (const [x, y] of sources) {
+      const cx = x * view.width, cy = y * view.height;
+      vctx.fillStyle = "#ffffff"; vctx.shadowColor = "#00b8d9"; vctx.shadowBlur = 14;
+      vctx.beginPath(); vctx.arc(cx, cy, 5 * (devicePixelRatio || 1), 0, Math.PI * 2); vctx.fill(); vctx.shadowBlur = 0;
+    }
+  };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+
+const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+function pos(e) {
+  const r = view.getBoundingClientRect(), t = e.touches ? e.touches[0] : e;
+  return { x: (t.clientX - r.left) / r.width, y: (t.clientY - r.top) / r.height };
+}
+let drawing = null, lastSend = 0;
+function down(e) {
+  e.preventDefault();
+  const p = pos(e);
+  if (mode === "source") send({ t: "source", x: p.x, y: p.y });
+  else drawing = p;
+}
+function move(e) {
+  if (!drawing) return;
+  e.preventDefault();
+  const p = pos(e), now = performance.now();
+  if (now - lastSend < 30) return;
+  send({ t: "wall", x0: drawing.x, y0: drawing.y, x1: p.x, y1: p.y, erase: mode === "erase" });
+  drawing = p; lastSend = now;
+}
+function up() { drawing = null; }
+view.addEventListener("mousedown", down); view.addEventListener("touchstart", down, { passive: false });
+addEventListener("mousemove", move); addEventListener("touchmove", move, { passive: false });
+addEventListener("mouseup", up); addEventListener("touchend", up);
+
+document.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("on", x === b));
+});
+document.querySelectorAll("[data-preset]").forEach((b) => b.onclick = () => send({ t: "preset", name: b.dataset.preset }));
+$("freq").onchange = () => send({ t: "freq", value: $("freq").value / 1000 });
+
+layout();
+connect();
+</script>
+</body>
+</html>
