@@ -74,6 +74,37 @@ def password_index(pw, charset):
     """Inverse of password_at: the keyspace index of this exact password."""
     c = len(charset)
     return sum(charset.index(ch) * (c ** p) for p, ch in enumerate(pw))
+
+
+# character-set choices offered when cracking a pasted hash (we don't know the real one)
+HASH_SETS = [
+    {"key": "h_num", "label": "letters & digits", "charset": LOWER + DIGITS},
+    {"key": "h_caps", "label": "letters, digits & CAPITALS", "charset": LOWER + UPPER + DIGITS},
+    {"key": "h_all", "label": "everything (slow)", "charset": ALL94},
+]
+
+
+def parse_hash(text):
+    """A pasted SHA-256 (64 hex chars) -> (8 big-endian words, None), else (None, message)."""
+    s = "".join(str(text).split()).lower()
+    if s.startswith("0x"):
+        s = s[2:]
+    if len(s) in (32, 40):
+        return None, "That looks like an MD5 or SHA-1 hash. This demo only cracks SHA-256 (64 characters) — use a SHA-256 generator."
+    if len(s) != 64 or any(c not in "0123456789abcdef" for c in s):
+        return None, "Paste a SHA-256 hash: 64 characters, 0-9 and a-f only."
+    return [int(s[i:i + 8], 16) for i in range(0, 64, 8)], None
+
+
+def hash_lengths(charset):
+    """The password lengths we can afford to brute-force for this character set (1 up to the cap)."""
+    out, L = [], 1
+    while len(charset) ** L <= MAX_LIVE:
+        out.append(L)
+        L += 1
+    return out
+
+
 # live options the presenter can pick (all small enough to crack in the room)
 DIFFICULTIES = [
     {"key": "l4", "label": "4 lowercase letters", "charset": "lower", "len": 4},
@@ -173,9 +204,13 @@ class Crack:
         self.finished = None
         self.found_by = None
         self.found_pw = None
-        self.mode = "random"                # "random" or "typed"
+        self.mode = "random"                # "random" / "typed" / "hash"
         self.label = ""                     # human description of the current target
         self.too_strong = False             # a typed password whose keyspace is too big to brute-force live
+        self.not_found = False              # a pasted hash whose password we could not brute-force
+        self.grand_total = 0                # size of the whole search (all length-spaces, for the progress bar)
+        self.spaces = []                    # for a hash crack: the (charset, length) spaces we try in turn
+        self.space_idx = 0
         self.rate_hist = collections.deque(maxlen=20)
 
     # ------------------------------------------------------------- helpers
@@ -209,13 +244,15 @@ class Crack:
         return sum(d.rate() for d in self.active())
 
     def state(self):
+        whole = self.grand_total or self.total
         return {"t": "state", "url": self.url, "phase": self.phase, "mode": self.mode, "too_strong": self.too_strong,
+                "not_found": self.not_found, "hash_sets": HASH_SETS, "hash_hex": getattr(self, "hash_hex", None),
                 "difficulties": DIFFICULTIES, "diff": self.diff["key"], "table": TABLE, "max_live": MAX_LIVE,
                 "charset_size": len(self.charset) if self.charset else len(CHARSETS[self.diff["charset"]]),
                 "length": self.length or self.diff["len"],
                 "diff_label": self.label or self.diff["label"],
-                "total": self.total, "guesses": self.guesses,
-                "progress": round(self.guesses / self.total, 4) if self.total else 0,
+                "total": whole, "guesses": self.guesses,
+                "progress": round(self.guesses / whole, 4) if whole else 0,
                 "rate": round(self.pooled_rate()), "devices": [d.public() for d in self.devices.values()],
                 "active": len(self.active()), "makers": sorted({d.maker for d in self.active()}),
                 "elapsed": round((self.finished or time.time()) - self.started, 2) if self.started else 0,
@@ -276,7 +313,63 @@ class Crack:
         self.target = list(struct.unpack(">8I", hashlib.sha256(pw.encode()).digest()))
         self.launch_crack()
 
+    def start_hash(self, hash_hex, set_key=None):
+        """Crack the password behind a pasted SHA-256 hash: try every short password
+        of a chosen character set, length by length, until it is found or the search
+        gets too big. Only short, simple passwords are found -- that is the lesson."""
+        target, err = parse_hash(hash_hex)
+        if err:
+            self.event(err, "warn")
+            self.to_walls(self.state())
+            return
+        self.reset_job()
+        self.mode = "hash"
+        hs = next((h for h in HASH_SETS if h["key"] == set_key), HASH_SETS[0])
+        cs = hs["charset"]
+        self.target = target
+        self.hash_hex = "".join(str(hash_hex).split()).lower().removeprefix("0x")[:64]
+        self.spaces = [(cs, L) for L in hash_lengths(cs)]
+        self.grand_total = sum(len(c) ** L for c, L in self.spaces)
+        self.label = f"the password behind a SHA-256 hash ({hs['label']})"
+        self.started = time.time()
+        for d in self.active():
+            d.guesses = 0
+        self.event(f"Trying to find the password behind a SHA-256 hash ({hs['label']}, "
+                   f"{self.grand_total:,} possibilities) with {max(1, len(self.active()))} device(s)", "start")
+        self.begin_space(0)
+
+    def begin_space(self, i):
+        cs, L = self.spaces[i]
+        self.space_idx = i
+        self.charset = cs
+        self.length = L
+        self.total = len(cs) ** L
+        self.cursor = 0
+        self.leftover.clear()
+        self.job_id += 1
+        n = max(1, len(self.active()))
+        units = max(1, round(self.total / (n * 6) / UNIT))
+        self.blocksize = min(units, 64) * UNIT
+        self.phase = "cracking"
+        tmsg = {"t": "target", "job": self.job_id, "target": self.target,
+                "charset": [ord(c) for c in cs], "passLen": L, "total": self.total, "reps": REPS}
+        for d in self.active():
+            d.status = "cracking"
+            d.blocks.clear()
+            self.send_soon(d.ws, tmsg)
+            self.assign_block(d)
+        self.to_walls(self.state())
+
+    def on_space_exhausted(self):
+        # a length searched with no match: in hash mode try the next length, else we're done
+        if self.mode == "hash" and self.space_idx + 1 < len(self.spaces):
+            self.begin_space(self.space_idx + 1)
+        else:
+            self.not_found = (self.mode == "hash")
+            self.finish(None)
+
     def launch_crack(self):
+        self.grand_total = self.total
         n = max(1, len(self.active()))
         # each device should get ~6 blocks, aligned to the work-unit size
         units = max(1, round(self.total / (n * 6) / UNIT))
@@ -324,7 +417,7 @@ class Crack:
             blk = self.next_block()
             if blk is None:
                 if not any(d.blocks for d in self.active()):
-                    self.finish(None)       # whole keyspace searched, nothing found
+                    self.on_space_exhausted()   # this length is done: try the next, or finish
                 return
             if not dev.blocks:
                 dev.block_base = blk[0]
@@ -375,6 +468,9 @@ class Crack:
             avg = self.guesses / max(elapsed, 0.001)
             self.event(f"CRACKED! The password was \"{pw}\" -- found by {self.found_by} in {elapsed:.1f}s "
                        f"after {self.guesses:,} guesses ({avg/1e6:.0f} million/sec pooled)", "done")
+        elif self.not_found:
+            self.event(f"Not found after {self.guesses:,} guesses -- the password behind this hash is not short "
+                       f"or simple enough to brute-force here. That's a strong password!", "done")
         else:
             self.event("Search finished.", "done")
         self.to_walls({"t": "cracked", "state": self.state()})
@@ -407,6 +503,8 @@ class Crack:
                 t = m.get("t")
                 if t == "start":
                     self.start(m.get("diff"), (m.get("pw") or None))
+                elif t == "hash":
+                    self.start_hash(m.get("hash"), m.get("set"))
                 elif t == "diff":
                     self.set_diff(m.get("diff"))
                     self.to_walls(self.state())

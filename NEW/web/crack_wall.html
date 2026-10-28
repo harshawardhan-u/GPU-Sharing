@@ -16,7 +16,8 @@
   h1 { margin: 0; font-size: 2.7vh; letter-spacing: .3vh; font-weight: 800; }
   h1 span { background: linear-gradient(90deg, #ffd45e, #ff9a4d, #ff7a6b); -webkit-background-clip: text; background-clip: text; color: transparent; }
   header p { margin: .3vh 0 0; font-size: 1.6vh; color: var(--ink2); }
-  .ctl { margin-left: auto; display: flex; gap: .6vw; align-items: center; }
+  .ctl { margin-left: auto; display: flex; gap: .6vw; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+  .ctl input.wide { width: 24vw; font-size: 1.4vh; }
   .ctl label { font-size: 1.4vh; color: var(--ink2); }
   .ctl select, .ctl button { font: inherit; font-size: 1.55vh; padding: .9vh 1.1vw; border-radius: 1vh; border: 1px solid var(--line); background: var(--panel2); color: var(--ink); cursor: pointer; }
   .ctl input { font: inherit; font-size: 1.7vh; padding: .9vh 1vw; border-radius: 1vh; border: 1px solid var(--line); background: #0d0f17; color: var(--ink); width: 15vw; outline: none; font-family: "Courier New", monospace; }
@@ -98,6 +99,9 @@
   <div class="ctl">
     <input id="pwInput" placeholder="Type a password to crack…" maxlength="12" autocomplete="off" spellcheck="false">
     <button id="crackBtn" class="primary">🔓 Crack this</button>
+    <input id="hashInput" class="wide" placeholder="…or paste a SHA-256 hash" autocomplete="off" spellcheck="false">
+    <select id="hashSet" title="Which characters the password might use"></select>
+    <button id="hashBtn" class="primary">🔎 Find from hash</button>
     <span style="color:var(--ink3);font-size:1.4vh">or</span>
     <select id="diff" title="Crack a random password instead"></select>
     <button id="startBtn">🎲 Random</button>
@@ -109,8 +113,8 @@
     <!-- intro -->
     <div class="intro" id="intro">
       <h2>How it works</h2>
-      <p class="lead">Type a password (like <b>a123</b>) and watch the room's phones crack it — or let the laptop make up a random one.
-         Then we see how long a <i>stronger</i> password would have taken.</p>
+      <p class="lead">Type a password (like <b>a123</b>), or paste a <b>SHA-256 hash</b>, and watch the room's phones crack it — or let the laptop make up a random one.
+         Short, simple passwords fall in seconds; strong ones come back <i>not found</i>. Then see how long a <i>stronger</i> password would take.</p>
       <div class="steps">
         <div class="step"><div class="n">1</div><b>A secret demo password</b><span>This laptop generates a random one and shares only its scrambled fingerprint (hash).</span></div>
         <div class="step"><div class="n">2</div><b>Phones guess on their GPUs</b><span>Each phone tries millions of guesses a second and checks each against the fingerprint.</span></div>
@@ -193,6 +197,9 @@ function render() {
     $("diff").value = S.diff;
   }
   if (document.activeElement !== $("diff")) $("diff").value = S.diff;
+  if (S.hash_sets && $("hashSet").options.length !== S.hash_sets.length) {
+    $("hashSet").innerHTML = S.hash_sets.map((h) => `<option value="${h.key}">${esc(h.label)}</option>`).join("");
+  }
   $("intro").classList.toggle("hide", S.phase !== "idle");
   $("live").classList.toggle("hide", S.phase !== "cracking");
   $("result").classList.toggle("hide", S.phase !== "done");
@@ -213,15 +220,19 @@ function render() {
   const icon = { join: "🟢", start: "🚀", done: "🔓", info: "•" };
   $("events").innerHTML = "<h3>What's happening</h3>" + S.events.slice(0, 5).map((e) => `<div class="ev k-${e.kind}">${icon[e.kind] || "•"} ${esc(e.text)}</div>`).join("");
   $("startBtn").textContent = S.phase === "cracking" ? "■ Cracking…" : "🎲 Random";
-  $("startBtn").disabled = S.phase === "cracking";
-  $("crackBtn").disabled = S.phase === "cracking";
+  const busy = S.phase === "cracking";
+  $("startBtn").disabled = busy; $("crackBtn").disabled = busy; $("hashBtn").disabled = busy;
 }
 function fmtKeyspace(S) { const n = Math.pow(S.charset_size, S.length); return n >= 1e6 ? (n / 1e6).toFixed(n < 1e8 ? 1 : 0) + " million" : Math.round(n).toLocaleString(); }
 
 function renderLive() {
   const [rv, ru] = fmtRate(S.rate);
   $("rate").textContent = rv; $("rateUnit").textContent = ru;
-  $("diffLabel").textContent = S.diff_label;
+  if (S.mode === "hash") {
+    $("diffLabel").innerHTML = `the password behind <span style="font-family:'Courier New',monospace;color:var(--accent)">${esc((S.hash_hex || "").slice(0, 20))}…</span> — trying <b>${S.length}</b>-character guesses`;
+  } else {
+    $("diffLabel").textContent = S.diff_label;
+  }
   $("dots").textContent = "•".repeat(S.length);
   $("prog").style.width = `${Math.min(100, S.progress * 100).toFixed(1)}%`;
   $("triedTxt").textContent = `${fmtBig(S.guesses)} tried (${(S.progress * 100).toFixed(1)}%)`;
@@ -230,21 +241,22 @@ function renderLive() {
 }
 const REF_RATE = 1e10;   // a strong attacker (~10 billion guesses/sec) for estimating uncracked passwords
 function renderResult() {
-  $("word").textContent = S.found_pw || "—";
   const measured = S.elapsed > 0 ? S.guesses / S.elapsed : S.rate;
-  let avg;
-  if (S.too_strong) {
+  let avg = Math.max(S.peak_rate || 0, measured);
+  if (S.not_found) {
+    $("crackHead").textContent = "Could not crack it 🛡️";
+    $("word").textContent = "not found"; $("word").style.color = "var(--accent)";
+    $("crackSub").innerHTML = `We tried <b>${S.guesses.toLocaleString()}</b> guesses and did not find the password behind this hash. It is not short or simple enough to brute-force here — that is a good password.`;
+  } else if (S.too_strong) {
     $("crackHead").textContent = "Too strong to crack here 🛡️";
-    $("word").style.color = "var(--accent)";
+    $("word").textContent = S.found_pw || "—"; $("word").style.color = "var(--accent)";
     avg = measured > 1e6 ? measured : REF_RATE;
     const n = Math.pow(S.charset_size, S.length), sec = n / avg;
     $("crackSub").innerHTML = `<b>${esc(S.found_pw)}</b> has <b>${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}</b> possibilities — ` +
       `about <b>${human(sec)}</b> to brute-force even at ${fmtRate(avg)[0]} ${fmtRate(avg)[1]}. That's exactly what you want.`;
   } else {
-    $("crackHead").textContent = "The room cracked the password";
-    $("word").style.color = "var(--good)";
-    // the peak pooled rate reflects the room's real speed; a short crack's average is noisy
-    avg = Math.max(S.peak_rate || 0, measured);
+    $("crackHead").textContent = S.mode === "hash" ? "The password behind the hash was" : "The room cracked the password";
+    $("word").textContent = S.found_pw || "—"; $("word").style.color = "var(--good)";
     $("crackSub").innerHTML = `Found by <b>${esc(S.found_by || "the room")}</b> in <b>${S.elapsed < 1 ? "under a second" : S.elapsed.toFixed(1) + " seconds"}</b> after <b>${S.guesses.toLocaleString()}</b> guesses`;
   }
   // for a too-fast-to-measure crack, estimate from the devices present (~60M guesses/s each is typical for a phone)
@@ -275,8 +287,14 @@ function crackTyped() {
   const pw = $("pwInput").value.trim();
   if (pw) send({ t: "start", pw });
 }
+function crackHash() {
+  const h = $("hashInput").value.trim();
+  if (h) send({ t: "hash", hash: h, set: $("hashSet").value });
+}
 $("crackBtn").onclick = crackTyped;
+$("hashBtn").onclick = crackHash;
 $("pwInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); crackTyped(); } });
+$("hashInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); crackHash(); } });
 $("startBtn").onclick = () => send({ t: "start", diff: $("diff").value });
 $("resetBtn").onclick = () => send({ t: "reset" });
 $("diff").onchange = () => send({ t: "diff", diff: $("diff").value });
